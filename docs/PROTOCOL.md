@@ -18,8 +18,11 @@
 The six recipes in `configs/registered/` override shared defaults in `config.py`.
 The entrypoint then supplies paths, seed, and stage settings, saving the complete
 effective configuration with each run. Relative asset paths are resolved beside
-the asset JSON. Other names inside checkpoints retain the original `SHARK`
-namespace for compatibility.
+the asset JSON. Model code lives in `models/gfm4mtsad/`; new configurations use
+the `GFM4MTSAD` group. Sealed runs from the former SHARK namespace remain
+readable: evaluation verifies the original bundle before translating legacy
+config names and the saved normal-mechanism class in memory. Historical files
+and tensor keys are preserved.
 
 `main.py evaluate` reloads the selected model, saved calibration tensors and
 normal mechanism. It checks the inference bundle and keeps the saved references

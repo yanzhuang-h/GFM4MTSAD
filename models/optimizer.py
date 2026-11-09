@@ -69,7 +69,7 @@ def set_lr(optimizer, new_lr):
 
 def get_param_groups(model):
     cfg = getattr(model, "cfg", None)
-    if cfg is None or not hasattr(cfg, "SHARK") or not hasattr(cfg.SHARK, "GFM_TUNING"):
+    if cfg is None or not hasattr(cfg, "GFM4MTSAD") or not hasattr(cfg.GFM4MTSAD, "GFM_TUNING"):
         return [p for n, p in model.named_parameters() if p.requires_grad]
 
     base_params = []
@@ -93,13 +93,13 @@ def get_param_groups(model):
         })
 
     if peft_params:
-        peft_lr = float(getattr(cfg.SHARK.GFM_TUNING, "PEFT_LR", cfg.SOLVER.BASE_LR))
-        peft_lr_scale = float(getattr(cfg.SHARK.GFM_TUNING, "PEFT_LR_SCALE", 1.0))
+        peft_lr = float(getattr(cfg.GFM4MTSAD.GFM_TUNING, "PEFT_LR", cfg.SOLVER.BASE_LR))
+        peft_lr_scale = float(getattr(cfg.GFM4MTSAD.GFM_TUNING, "PEFT_LR_SCALE", 1.0))
         if peft_lr > 0:
             lr_scale = peft_lr / max(float(cfg.SOLVER.BASE_LR), 1e-12)
         else:
             lr_scale = peft_lr_scale
-        peft_weight_decay = float(getattr(cfg.SHARK.GFM_TUNING, "PEFT_WEIGHT_DECAY", -1.0))
+        peft_weight_decay = float(getattr(cfg.GFM4MTSAD.GFM_TUNING, "PEFT_WEIGHT_DECAY", -1.0))
         if peft_weight_decay < 0:
             peft_weight_decay = cfg.SOLVER.WEIGHT_DECAY
         param_groups.append({

@@ -16,7 +16,7 @@ from utils.oraclead_metrics import (
 
 
 EPS = np.finfo(np.float64).eps
-PROTOCOL_METADATA_VERSION = "SHARK-METRIC-PROTOCOL-METADATA-V2"
+PROTOCOL_METADATA_VERSION = "GFM4MTSAD-METRIC-PROTOCOL-METADATA-V2"
 ALLOWED_AGGREGATION_LEVELS = frozenset(
     {"entity", "dataset", "pooled_entities", "unspecified"}
 )
@@ -139,23 +139,23 @@ def build_protocol_metadata(
             uses_test_labels_for_threshold=True,
         ),
         "legacy_oracle.threshold_realized_raw": entry(
-            "shark.binary_confusion.v1",
+            "gfm4mtsad.binary_confusion.v1",
             threshold_source=oracle_source,
             uses_test_labels_for_threshold=True,
         ),
         "legacy_oracle.point_adjusted": entry(
-            "shark.binary_event_completion.v1",
+            "gfm4mtsad.binary_event_completion.v1",
             threshold_source=oracle_source,
             uses_test_labels_for_threshold=True,
             point_adjustment="binary_event_completion_after_threshold",
         ),
         "legacy_oracle.event": entry(
-            "shark.event_overlap.v1",
+            "gfm4mtsad.event_overlap.v1",
             threshold_source=oracle_source,
             uses_test_labels_for_threshold=True,
         ),
         "legacy_oracle.operational": entry(
-            "shark.false_alarm_rate.v1",
+            "gfm4mtsad.false_alarm_rate.v1",
             threshold_source=oracle_source,
             uses_test_labels_for_threshold=True,
         ),
@@ -199,23 +199,23 @@ def build_protocol_metadata(
         uses_test = deployable_selection.uses_test_labels
         metrics.update({
             "deployable.point": entry(
-                "shark.binary_confusion.v1",
+                "gfm4mtsad.binary_confusion.v1",
                 threshold_source=source,
                 uses_test_labels_for_threshold=uses_test,
             ),
             "deployable.point_adjusted": entry(
-                "shark.binary_event_completion.v1",
+                "gfm4mtsad.binary_event_completion.v1",
                 threshold_source=source,
                 uses_test_labels_for_threshold=uses_test,
                 point_adjustment="binary_event_completion_after_threshold",
             ),
             "deployable.event": entry(
-                "shark.event_overlap.v1",
+                "gfm4mtsad.event_overlap.v1",
                 threshold_source=source,
                 uses_test_labels_for_threshold=uses_test,
             ),
             "deployable.operational": entry(
-                "shark.false_alarm_rate.v1",
+                "gfm4mtsad.false_alarm_rate.v1",
                 threshold_source=source,
                 uses_test_labels_for_threshold=uses_test,
             ),
@@ -252,12 +252,12 @@ def localization_protocol_metadata(
         label_stage,
     )
     formulas = {
-        "direct_hit_at_k": "shark.localization.direct_hit_at_k.v1",
-        "direct_mrr": "shark.localization.direct_mrr.v1",
-        "direct_ndcg_at_k": "shark.localization.direct_ndcg_at_k.v1",
-        "node_auprc": "shark.localization.node_average_precision.v1",
+        "direct_hit_at_k": "gfm4mtsad.localization.direct_hit_at_k.v1",
+        "direct_mrr": "gfm4mtsad.localization.direct_mrr.v1",
+        "direct_ndcg_at_k": "gfm4mtsad.localization.direct_ndcg_at_k.v1",
+        "node_auprc": "gfm4mtsad.localization.node_average_precision.v1",
         "affected_hit_recall_ndcg_at_k": (
-            "shark.localization.affected_ranking_at_k.v1"
+            "gfm4mtsad.localization.affected_ranking_at_k.v1"
         ),
     }
     return {
@@ -333,7 +333,7 @@ def contiguous_positive_runs(values):
 def parse_smd_interpretation_text(text, node_count):
     """解析 SMD 官方 interpretation-label 文本格式。
 
-    文本中的传感器编号从 1 开始。时间区间沿用 SHARK 已审计的半开约定：
+    文本中的传感器编号从 1 开始。时间区间沿用 GFM4MTSAD 已审计的半开约定：
     ``start-end`` 覆盖 ``start, ..., end - 1``。
     """
     node_count = int(node_count)
@@ -378,7 +378,7 @@ def smd_endpoint_targets(
     window_size=10,
     step=1,
 ):
-    """把 SMD 传感器标签对齐到 SHARK/CAROTS 的窗口末端预测。"""
+    """把 SMD 传感器标签对齐到 GFM4MTSAD/CAROTS 的窗口末端预测。"""
     window_count = int(window_count)
     node_count = int(node_count)
     window_size = int(window_size)
@@ -830,7 +830,7 @@ def pgrf_metrics(
             uses_test_labels=False,
         )
     return {
-        "schema_version": "SHARK-PGRF-METRICS-V2",
+        "schema_version": "GFM4MTSAD-PGRF-METRICS-V2",
         "paper_protocol_note": (
             "Section 4.3 states validation threshold selection, while Appendix B.2 "
             "describes best-F1 search over the observed score range. Both tracks "
@@ -1066,7 +1066,7 @@ def metric_catalog():
             "metrics": "raw P/R/F1 and PA P/R/F1",
             "formula_ids": (
                 "carots.test_pr_curve_best_f1.v1/"
-                "shark.binary_event_completion.v1"
+                "gfm4mtsad.binary_event_completion.v1"
             ),
             "threshold_source": "oracle_test_best_f1",
             "point_adjustment": "raw_and_binary_event_completion",
@@ -1076,7 +1076,7 @@ def metric_catalog():
         {
             "group": "deployable",
             "metrics": "point P/R/F1, specificity, balanced accuracy, MCC",
-            "formula_ids": "shark.binary_confusion.v1",
+            "formula_ids": "gfm4mtsad.binary_confusion.v1",
             "threshold_source": "fixed_or_validation_or_normal_reference",
             "point_adjustment": "none",
             "test_labels_for_threshold": False,
@@ -1086,7 +1086,7 @@ def metric_catalog():
             "group": "event",
             "metrics": "Event-F1/hit rate/coverage/delay/false alarms",
             "formula_ids": (
-                "shark.event_overlap.v1/shark.false_alarm_rate.v1"
+                "gfm4mtsad.event_overlap.v1/gfm4mtsad.false_alarm_rate.v1"
             ),
             "threshold_source": "inherits_named_threshold_track",
             "point_adjustment": "none",
@@ -1153,7 +1153,7 @@ def metric_catalog():
         {
             "group": "localization",
             "metrics": "HR@K/MRR/NDCG/node AUPRC",
-            "formula_ids": "shark.localization.ranking.v1",
+            "formula_ids": "gfm4mtsad.localization.ranking.v1",
             "threshold_source": "none_rank_based",
             "point_adjustment": "none",
             "test_labels_for_threshold": False,
@@ -1220,7 +1220,7 @@ def evaluate_all_metrics(
         label_stage=label_stage,
     )
     return {
-        "protocol_version": "SHARK-COMPREHENSIVE-METRICS-V2",
+        "protocol_version": "GFM4MTSAD-COMPREHENSIVE-METRICS-V2",
         "protocol_metadata": protocol_metadata,
         "sample_count": int(labels.size),
         "anomaly_point_count": int(labels.sum()),

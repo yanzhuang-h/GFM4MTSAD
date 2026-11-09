@@ -3,24 +3,24 @@ import random
 
 import torch
 
-from models.shark.frontend_graph_effective_selector import (
+from models.gfm4mtsad.frontend_graph_effective_selector import (
     FrontendGraphEffectiveSelector,
 )
-from models.shark.frozen_gfm_teacher_selector import FrozenGFMTeacherSelector
-from models.shark.otrcl_integrity import (
+from models.gfm4mtsad.frozen_gfm_teacher_selector import FrozenGFMTeacherSelector
+from models.gfm4mtsad.otrcl_integrity import (
     normalized_graph_drift,
     normalized_temporal_drift,
 )
 
-from models.shark.normal_mechanism import GlobalGraphVARMechanism
-from models.shark.funtsg_inspired import function_candidates
-from models.shark.mechanism_matched import (
+from models.gfm4mtsad.normal_mechanism import GlobalGraphVARMechanism
+from models.gfm4mtsad.funtsg_inspired import function_candidates
+from models.gfm4mtsad.mechanism_matched import (
     MechanismMatchedPairBuilder,
     temporal_pair_fairness,
 )
 
 
-class SharkAugmentor:
+class GFM4MTSADAugmentor:
     SURROGATE_TYPES = ("surrogate_parent_delete", "surrogate_parent_replace")
     DIRECT_FALLBACK_TYPES = (
         "lag_break",
@@ -37,27 +37,27 @@ class SharkAugmentor:
     ACCEPTANCE_HARD = 2
 
     def __init__(self, cfg):
-        self.candidate_generator = str(getattr(cfg.SHARK.SYNTHETIC, "CANDIDATE_GENERATOR", "graph_var"))
+        self.candidate_generator = str(getattr(cfg.GFM4MTSAD.SYNTHETIC, "CANDIDATE_GENERATOR", "graph_var"))
         if self.candidate_generator not in ("graph_var", "funtsg_inspired", "hybrid"):
             raise ValueError("unknown CANDIDATE_GENERATOR")
         self.generator_counts = {name: dict(proposed=0, generated=0, accepted=0, selected=0)
                                  for name in ("graph_var", "funtsg_inspired", "legacy")}
         self.generator_cells = {}
         self.counterfactual_implementation = str(getattr(
-            cfg.SHARK.SYNTHETIC, "COUNTERFACTUAL_IMPLEMENTATION", "scalar"))
+            cfg.GFM4MTSAD.SYNTHETIC, "COUNTERFACTUAL_IMPLEMENTATION", "scalar"))
         if self.counterfactual_implementation not in ("scalar", "batched_strengths", "batched_precomputed"):
             raise ValueError("unknown COUNTERFACTUAL_IMPLEMENTATION")
-        self.noise_std = cfg.SHARK.AUGMENT.NOISE_STD
-        self.positive_noise_std = cfg.SHARK.CONTRAST.POSITIVE_NOISE_STD
+        self.noise_std = cfg.GFM4MTSAD.AUGMENT.NOISE_STD
+        self.positive_noise_std = cfg.GFM4MTSAD.CONTRAST.POSITIVE_NOISE_STD
         self.positive_view_mode = str(
-            getattr(cfg.SHARK.CONTRAST, "POSITIVE_VIEW_MODE", "legacy")
+            getattr(cfg.GFM4MTSAD.CONTRAST, "POSITIVE_VIEW_MODE", "legacy")
         )
         self.positive_time_ratio = float(
-            getattr(cfg.SHARK.CONTRAST, "POSITIVE_TIME_RATIO", 1.0)
+            getattr(cfg.GFM4MTSAD.CONTRAST, "POSITIVE_TIME_RATIO", 1.0)
         )
         self.graph_consistent_positive_enable = bool(
             getattr(
-                cfg.SHARK.CONTRAST,
+                cfg.GFM4MTSAD.CONTRAST,
                 "GRAPH_CONSISTENT_POSITIVE_ENABLE",
                 False,
             )
@@ -66,7 +66,7 @@ class SharkAugmentor:
             1,
             int(
                 getattr(
-                    cfg.SHARK.CONTRAST,
+                    cfg.GFM4MTSAD.CONTRAST,
                     "GRAPH_CONSISTENT_POSITIVE_CANDIDATES",
                     3,
                 )
@@ -74,7 +74,7 @@ class SharkAugmentor:
         )
         self.graph_consistent_positive_temporal_quantile = float(
             getattr(
-                cfg.SHARK.CONTRAST,
+                cfg.GFM4MTSAD.CONTRAST,
                 "GRAPH_CONSISTENT_POSITIVE_TEMPORAL_QUANTILE",
                 0.5,
             )
@@ -84,91 +84,91 @@ class SharkAugmentor:
         # the most temporally informative positive. The default preserves H2.
         self.graph_consistent_positive_selector = str(
             getattr(
-                cfg.SHARK.CONTRAST,
+                cfg.GFM4MTSAD.CONTRAST,
                 "GRAPH_CONSISTENT_POSITIVE_SELECTOR",
                 "min_graph_after_temporal_gate",
             )
         )
         self.graph_consistent_positive_graph_quantile = float(
             getattr(
-                cfg.SHARK.CONTRAST,
+                cfg.GFM4MTSAD.CONTRAST,
                 "GRAPH_CONSISTENT_POSITIVE_GRAPH_QUANTILE",
                 0.5,
             )
         )
-        self.negative_node_ratio = cfg.SHARK.CONTRAST.NEGATIVE_NODE_RATIO
-        self.subgraph_topk = cfg.SHARK.CONTRAST.SUBGRAPH_TOPK
-        self.synthetic_node_ratio = cfg.SHARK.SYNTHETIC.NODE_RATIO
-        self.synthetic_time_ratio = cfg.SHARK.SYNTHETIC.TIME_RATIO
+        self.negative_node_ratio = cfg.GFM4MTSAD.CONTRAST.NEGATIVE_NODE_RATIO
+        self.subgraph_topk = cfg.GFM4MTSAD.CONTRAST.SUBGRAPH_TOPK
+        self.synthetic_node_ratio = cfg.GFM4MTSAD.SYNTHETIC.NODE_RATIO
+        self.synthetic_time_ratio = cfg.GFM4MTSAD.SYNTHETIC.TIME_RATIO
         self.synthetic_time_ratio_min = float(
-            getattr(cfg.SHARK.SYNTHETIC, "TIME_RATIO_MIN", self.synthetic_time_ratio)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "TIME_RATIO_MIN", self.synthetic_time_ratio)
         )
         self.synthetic_time_ratio_max = float(
-            getattr(cfg.SHARK.SYNTHETIC, "TIME_RATIO_MAX", self.synthetic_time_ratio)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "TIME_RATIO_MAX", self.synthetic_time_ratio)
         )
         self.segment_length_policy = str(
-            getattr(cfg.SHARK.SYNTHETIC, "SEGMENT_LENGTH_POLICY", "uniform_ratio")
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "SEGMENT_LENGTH_POLICY", "uniform_ratio")
         )
         probabilities = tuple(
             float(value)
             for value in getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "EVENT_SCALE_PROBABILITIES",
                 (0.25, 0.50, 0.25),
             )
         )
         self.event_scale_probabilities = probabilities
         self.event_scale_micro_min = int(
-            getattr(cfg.SHARK.SYNTHETIC, "EVENT_SCALE_MICRO_MIN", 2)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "EVENT_SCALE_MICRO_MIN", 2)
         )
         self.event_scale_micro_max = int(
-            getattr(cfg.SHARK.SYNTHETIC, "EVENT_SCALE_MICRO_MAX", 3)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "EVENT_SCALE_MICRO_MAX", 3)
         )
         self.event_scale_persistent_ratio_min = float(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "EVENT_SCALE_PERSISTENT_RATIO_MIN",
                 0.75,
             )
         )
         self.event_scale_persistent_ratio_max = float(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "EVENT_SCALE_PERSISTENT_RATIO_MAX",
                 1.0,
             )
         )
-        self.synthetic_magnitude = cfg.SHARK.SYNTHETIC.MAGNITUDE
-        self.synthetic_mode = cfg.SHARK.SYNTHETIC.MODE
-        self.synthetic_types = tuple(cfg.SHARK.SYNTHETIC.TYPES)
-        self.diagnostic_types = tuple(getattr(cfg.SHARK.SYNTHETIC, "DIAGNOSTIC_TYPES", ()))
-        self.edit_mode = getattr(cfg.SHARK.SYNTHETIC, "EDIT_MODE", "legacy")
-        self.edit_strength_start = float(getattr(cfg.SHARK.SYNTHETIC, "EDIT_STRENGTH_START", 0.25))
-        self.edit_strength_end = float(getattr(cfg.SHARK.SYNTHETIC, "EDIT_STRENGTH_END", 0.75))
-        self.max_delta_std = float(getattr(cfg.SHARK.SYNTHETIC, "MAX_DELTA_STD", 3.0))
+        self.synthetic_magnitude = cfg.GFM4MTSAD.SYNTHETIC.MAGNITUDE
+        self.synthetic_mode = cfg.GFM4MTSAD.SYNTHETIC.MODE
+        self.synthetic_types = tuple(cfg.GFM4MTSAD.SYNTHETIC.TYPES)
+        self.diagnostic_types = tuple(getattr(cfg.GFM4MTSAD.SYNTHETIC, "DIAGNOSTIC_TYPES", ()))
+        self.edit_mode = getattr(cfg.GFM4MTSAD.SYNTHETIC, "EDIT_MODE", "legacy")
+        self.edit_strength_start = float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "EDIT_STRENGTH_START", 0.25))
+        self.edit_strength_end = float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "EDIT_STRENGTH_END", 0.75))
+        self.max_delta_std = float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "MAX_DELTA_STD", 3.0))
         self.hybrid_fallback_types = tuple(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "HYBRID_FALLBACK_TYPES",
                 self.DIRECT_FALLBACK_TYPES,
             )
         )
         self.hybrid_fallback_min_rms = max(
             0.0,
-            float(getattr(cfg.SHARK.SYNTHETIC, "HYBRID_FALLBACK_MIN_RMS", 0.1)),
+            float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "HYBRID_FALLBACK_MIN_RMS", 0.1)),
         )
         self.hybrid_fallback_max_rms = max(
             self.hybrid_fallback_min_rms,
-            float(getattr(cfg.SHARK.SYNTHETIC, "HYBRID_FALLBACK_MAX_RMS", 1.0)),
+            float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "HYBRID_FALLBACK_MAX_RMS", 1.0)),
         )
         self.hybrid_fallback_validity_enable = bool(
-            getattr(cfg.SHARK.SYNTHETIC, "HYBRID_FALLBACK_VALIDITY_ENABLE", False)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "HYBRID_FALLBACK_VALIDITY_ENABLE", False)
         )
         self.hybrid_fallback_min_mechanism_gain = max(
             0.0,
             float(
                 getattr(
-                    cfg.SHARK.SYNTHETIC,
+                    cfg.GFM4MTSAD.SYNTHETIC,
                     "HYBRID_FALLBACK_MIN_MECHANISM_GAIN",
                     0.0,
                 )
@@ -178,7 +178,7 @@ class SharkAugmentor:
             self.hybrid_fallback_min_mechanism_gain,
             float(
                 getattr(
-                    cfg.SHARK.SYNTHETIC,
+                    cfg.GFM4MTSAD.SYNTHETIC,
                     "HYBRID_FALLBACK_MAX_MECHANISM_GAIN",
                     float("inf"),
                 )
@@ -186,27 +186,27 @@ class SharkAugmentor:
         )
         self.hybrid_fallback_candidates = max(
             1,
-            int(getattr(cfg.SHARK.SYNTHETIC, "HYBRID_FALLBACK_CANDIDATES", 5)),
+            int(getattr(cfg.GFM4MTSAD.SYNTHETIC, "HYBRID_FALLBACK_CANDIDATES", 5)),
         )
         self.direct_quantile_start = float(
-            getattr(cfg.SHARK.SYNTHETIC, "DIRECT_QUANTILE_START", 0.80)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "DIRECT_QUANTILE_START", 0.80)
         )
         self.direct_quantile_end = float(
-            getattr(cfg.SHARK.SYNTHETIC, "DIRECT_QUANTILE_END", 0.90)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "DIRECT_QUANTILE_END", 0.90)
         )
         self.direct_quantile_cap = float(
-            getattr(cfg.SHARK.SYNTHETIC, "DIRECT_QUANTILE_CAP", 0.995)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "DIRECT_QUANTILE_CAP", 0.995)
         )
         self.direct_quantile_reference_scale_mode = str(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "DIRECT_QUANTILE_REFERENCE_SCALE_MODE",
                 "iqr",
             )
         )
         self.direct_quantile_upper_bound_mode = str(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "DIRECT_QUANTILE_UPPER_BOUND_MODE",
                 "mechanism_cap",
             )
@@ -215,7 +215,7 @@ class SharkAugmentor:
             max(
                 float(
                     getattr(
-                        cfg.SHARK.SYNTHETIC,
+                        cfg.GFM4MTSAD.SYNTHETIC,
                         "DIRECT_QUANTILE_RMS_RESCUE_WEIGHT",
                         0.25,
                     )
@@ -228,7 +228,7 @@ class SharkAugmentor:
             0.0,
             float(
                 getattr(
-                    cfg.SHARK.SYNTHETIC,
+                    cfg.GFM4MTSAD.SYNTHETIC,
                     "DIRECT_QUANTILE_MIN_REFERENCE_GAIN",
                     0.10,
                 )
@@ -238,7 +238,7 @@ class SharkAugmentor:
             1,
             int(
                 getattr(
-                    cfg.SHARK.SYNTHETIC,
+                    cfg.GFM4MTSAD.SYNTHETIC,
                     "DIRECT_QUANTILE_SEGMENT_TRIALS",
                     3,
                 )
@@ -246,28 +246,28 @@ class SharkAugmentor:
         )
         self.direct_quantile_acceptance_mode = str(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "DIRECT_QUANTILE_ACCEPTANCE_MODE",
                 "hard",
             )
         )
         self.direct_quantile_soft_min_weight = float(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "DIRECT_QUANTILE_SOFT_MIN_WEIGHT",
                 0.25,
             )
         )
         self.direct_quantile_soft_power = float(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "DIRECT_QUANTILE_SOFT_POWER",
                 1.0,
             )
         )
         self.direct_mechanism_score_mode = str(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "DIRECT_MECHANISM_SCORE_MODE",
                 "legacy_shared",
             )
@@ -275,7 +275,7 @@ class SharkAugmentor:
         self.direct_mechanism_ridge = max(
             float(
                 getattr(
-                    cfg.SHARK.SYNTHETIC,
+                    cfg.GFM4MTSAD.SYNTHETIC,
                     "DIRECT_MECHANISM_RIDGE",
                     1e-3,
                 )
@@ -285,7 +285,7 @@ class SharkAugmentor:
         self.direct_mechanism_min_context = max(
             int(
                 getattr(
-                    cfg.SHARK.SYNTHETIC,
+                    cfg.GFM4MTSAD.SYNTHETIC,
                     "DIRECT_MECHANISM_MIN_CONTEXT",
                     3,
                 )
@@ -295,7 +295,7 @@ class SharkAugmentor:
         self.direct_relation_flip_orientation_weight = max(
             float(
                 getattr(
-                    cfg.SHARK.SYNTHETIC,
+                    cfg.GFM4MTSAD.SYNTHETIC,
                     "DIRECT_RELATION_FLIP_ORIENTATION_WEIGHT",
                     1.0,
                 )
@@ -304,53 +304,53 @@ class SharkAugmentor:
         )
         self.direct_candidate_support_mode = str(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "DIRECT_CANDIDATE_SUPPORT_MODE",
                 "none",
             )
         )
         self.direct_candidate_support_low_quantile = float(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "DIRECT_CANDIDATE_SUPPORT_LOW_QUANTILE",
                 0.01,
             )
         )
         self.direct_candidate_support_high_quantile = float(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "DIRECT_CANDIDATE_SUPPORT_HIGH_QUANTILE",
                 0.99,
             )
         )
         self.negative_screening_mode = str(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "NEGATIVE_SCREENING_MODE",
                 "legacy_boundary",
             )
         )
         self.frontend_primary_nonlegacy_weight = float(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "FRONTEND_PRIMARY_NONLEGACY_WEIGHT",
                 1.0,
             )
         )
         self.gm_hns_difficulty_low = float(
-            getattr(cfg.SHARK.SYNTHETIC, "GM_HNS_DIFFICULTY_LOW", 0.10)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "GM_HNS_DIFFICULTY_LOW", 0.10)
         )
         self.gm_hns_difficulty_high = float(
-            getattr(cfg.SHARK.SYNTHETIC, "GM_HNS_DIFFICULTY_HIGH", 0.85)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "GM_HNS_DIFFICULTY_HIGH", 0.85)
         )
         self.gm_hns_difficulty_target = float(
-            getattr(cfg.SHARK.SYNTHETIC, "GM_HNS_DIFFICULTY_TARGET", 0.45)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "GM_HNS_DIFFICULTY_TARGET", 0.45)
         )
         self.gm_hns_rms_weight = max(
             0.0,
-            float(getattr(cfg.SHARK.SYNTHETIC, "GM_HNS_RMS_WEIGHT", 0.05)),
+            float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "GM_HNS_RMS_WEIGHT", 0.05)),
         )
-        otrcl_settings = getattr(cfg.SHARK, "OTRCL", None)
+        otrcl_settings = getattr(cfg.GFM4MTSAD, "OTRCL", None)
         self.wf_orthogonality_enable = bool(
             getattr(
                 otrcl_settings,
@@ -379,81 +379,81 @@ class SharkAugmentor:
                 "raw_abs_pearson",
             )
         )
-        self.surrogate_lag = max(1, int(getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_LAG", 1)))
+        self.surrogate_lag = max(1, int(getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_LAG", 1)))
         self.surrogate_include_contemporaneous = bool(
-            getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_INCLUDE_CONTEMPORANEOUS", False)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_INCLUDE_CONTEMPORANEOUS", False)
         )
-        self.surrogate_ridge = max(float(getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_RIDGE", 0.01)), 1e-6)
+        self.surrogate_ridge = max(float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_RIDGE", 0.01)), 1e-6)
         self.surrogate_min_context = max(
             4,
-            int(getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_MIN_CONTEXT", 12)),
+            int(getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_MIN_CONTEXT", 12)),
         )
         self.surrogate_segment_trials = max(
             1,
-            int(getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_SEGMENT_TRIALS", 3)),
+            int(getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_SEGMENT_TRIALS", 3)),
         )
         self.surrogate_seed_trials = max(
             1,
-            int(getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_SEED_TRIALS", 1)),
+            int(getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_SEED_TRIALS", 1)),
         )
         self.surrogate_parent_candidates = max(
             1,
-            int(getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_PARENT_CANDIDATES", 5)),
+            int(getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_PARENT_CANDIDATES", 5)),
         )
         self.surrogate_min_r2 = float(
-            getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_MIN_R2", 0.0)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_MIN_R2", 0.0)
         )
         self.surrogate_min_delta_r2 = max(
             0.0,
-            float(getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_MIN_DELTA_R2", 0.0)),
+            float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_MIN_DELTA_R2", 0.0)),
         )
         self.surrogate_min_residual_ratio = max(
             0.0,
-            float(getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_MIN_RESIDUAL_RATIO", 0.05)),
+            float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_MIN_RESIDUAL_RATIO", 0.05)),
         )
         self.surrogate_min_scale = max(
             1e-4,
-            float(getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_MIN_SCALE", 0.01)),
+            float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_MIN_SCALE", 0.01)),
         )
         self.surrogate_max_scale = max(
             self.surrogate_min_scale,
-            float(getattr(cfg.SHARK.SYNTHETIC, "SURROGATE_MAX_SCALE", 4.0)),
+            float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "SURROGATE_MAX_SCALE", 4.0)),
         )
         self.boundary_candidates = max(
             1,
-            int(getattr(cfg.SHARK.SYNTHETIC, "BOUNDARY_CANDIDATES", 3)),
+            int(getattr(cfg.GFM4MTSAD.SYNTHETIC, "BOUNDARY_CANDIDATES", 3)),
         )
         self.boundary_quantile_start = float(
-            getattr(cfg.SHARK.SYNTHETIC, "BOUNDARY_QUANTILE_START", 0.99)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "BOUNDARY_QUANTILE_START", 0.99)
         )
         self.boundary_quantile_end = float(
-            getattr(cfg.SHARK.SYNTHETIC, "BOUNDARY_QUANTILE_END", 0.95)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "BOUNDARY_QUANTILE_END", 0.95)
         )
         self.boundary_easy_mix = min(
-            max(float(getattr(cfg.SHARK.SYNTHETIC, "BOUNDARY_EASY_MIX", 0.2)), 0.0),
+            max(float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "BOUNDARY_EASY_MIX", 0.2)), 0.0),
             1.0,
         )
         self.boundary_min_score_increase = max(
             0.0,
-            float(getattr(cfg.SHARK.SYNTHETIC, "BOUNDARY_MIN_SCORE_INCREASE", 0.1)),
+            float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "BOUNDARY_MIN_SCORE_INCREASE", 0.1)),
         )
         self.boundary_mean_shift_cap = max(
             0.0,
-            float(getattr(cfg.SHARK.SYNTHETIC, "BOUNDARY_MEAN_SHIFT_CAP", 1.5)),
+            float(getattr(cfg.GFM4MTSAD.SYNTHETIC, "BOUNDARY_MEAN_SHIFT_CAP", 1.5)),
         )
         self.require_accepted = bool(
-            getattr(cfg.SHARK.SYNTHETIC, "REQUIRE_ACCEPTED", False)
+            getattr(cfg.GFM4MTSAD.SYNTHETIC, "REQUIRE_ACCEPTED", False)
         )
-        self.seed_selection = cfg.SHARK.SYNTHETIC.SEED_SELECTION
-        self.evidence_temperature = cfg.SHARK.SYNTHETIC.EVIDENCE_TEMPERATURE
-        self.evidence_random_mix = cfg.SHARK.SYNTHETIC.EVIDENCE_RANDOM_MIX
-        self.strength_schedule = cfg.SHARK.SYNTHETIC.STRENGTH_SCHEDULE
-        self.magnitude_start = cfg.SHARK.SYNTHETIC.MAGNITUDE_START
-        self.magnitude_end = cfg.SHARK.SYNTHETIC.MAGNITUDE_END
-        self.random_noise_std = cfg.SHARK.SYNTHETIC.RANDOM_NOISE_STD
+        self.seed_selection = cfg.GFM4MTSAD.SYNTHETIC.SEED_SELECTION
+        self.evidence_temperature = cfg.GFM4MTSAD.SYNTHETIC.EVIDENCE_TEMPERATURE
+        self.evidence_random_mix = cfg.GFM4MTSAD.SYNTHETIC.EVIDENCE_RANDOM_MIX
+        self.strength_schedule = cfg.GFM4MTSAD.SYNTHETIC.STRENGTH_SCHEDULE
+        self.magnitude_start = cfg.GFM4MTSAD.SYNTHETIC.MAGNITUDE_START
+        self.magnitude_end = cfg.GFM4MTSAD.SYNTHETIC.MAGNITUDE_END
+        self.random_noise_std = cfg.GFM4MTSAD.SYNTHETIC.RANDOM_NOISE_STD
         self.scope_aware_negative_enable = bool(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "SCOPE_AWARE_NEGATIVE_ENABLE",
                 False,
             )
@@ -462,7 +462,7 @@ class SharkAugmentor:
             max(
                 float(
                     getattr(
-                        cfg.SHARK.SYNTHETIC,
+                        cfg.GFM4MTSAD.SYNTHETIC,
                         "SCOPE_AWARE_NEGATIVE_PROBABILITY",
                         0.80,
                     )
@@ -475,7 +475,7 @@ class SharkAugmentor:
             1,
             int(
                 getattr(
-                    cfg.SHARK.SYNTHETIC,
+                    cfg.GFM4MTSAD.SYNTHETIC,
                     "SCOPE_AWARE_NEGATIVE_MIN_NODES",
                     1,
                 )
@@ -485,7 +485,7 @@ class SharkAugmentor:
             self.scope_aware_negative_min_nodes,
             int(
                 getattr(
-                    cfg.SHARK.SYNTHETIC,
+                    cfg.GFM4MTSAD.SYNTHETIC,
                     "SCOPE_AWARE_NEGATIVE_MAX_NODES",
                     5,
                 )
@@ -495,7 +495,7 @@ class SharkAugmentor:
             0.0,
             float(
                 getattr(
-                    cfg.SHARK.SYNTHETIC,
+                    cfg.GFM4MTSAD.SYNTHETIC,
                     "SCOPE_AWARE_NEGATIVE_EFFECT_SCALE",
                     0.35,
                 )
@@ -505,7 +505,7 @@ class SharkAugmentor:
             max(
                 float(
                     getattr(
-                        cfg.SHARK.SYNTHETIC,
+                        cfg.GFM4MTSAD.SYNTHETIC,
                         "SCOPE_AWARE_NEGATIVE_SINGLETON_WEIGHT",
                         0.90,
                     )
@@ -534,14 +534,14 @@ class SharkAugmentor:
         self.frozen_gfm_teacher_selector = None
         self.coverage_balanced_schedule_enable = bool(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "COVERAGE_BALANCED_SCHEDULE_ENABLE",
                 False,
             )
         )
         self.mechanism_availability_routing_enable = bool(
             getattr(
-                cfg.SHARK.SYNTHETIC,
+                cfg.GFM4MTSAD.SYNTHETIC,
                 "MECHANISM_AVAILABILITY_ROUTING_ENABLE",
                 False,
             )
@@ -572,7 +572,7 @@ class SharkAugmentor:
         self._last_mechanism_details = {}
         self.mechanism_matched_enabled = bool(
             getattr(
-                getattr(cfg.SHARK, "RELATION_RESIDUAL_CONTRAST", None),
+                getattr(cfg.GFM4MTSAD, "RELATION_RESIDUAL_CONTRAST", None),
                 "ENABLE",
                 False,
             )
@@ -580,7 +580,7 @@ class SharkAugmentor:
         self.mechanism_matched_lag_offset = max(
             int(
                 getattr(
-                    cfg.SHARK.SYNTHETIC,
+                    cfg.GFM4MTSAD.SYNTHETIC,
                     "GRAPH_VAR_LAG_OFFSET_STEPS",
                     1,
                 )
@@ -590,7 +590,7 @@ class SharkAugmentor:
 
         if self.positive_view_mode not in ("legacy", "shared_affine_segment"):
             raise ValueError(
-                "Unsupported SHARK.CONTRAST.POSITIVE_VIEW_MODE: "
+                "Unsupported GFM4MTSAD.CONTRAST.POSITIVE_VIEW_MODE: "
                 f"{self.positive_view_mode}"
             )
         if self.seed_selection not in (
@@ -599,7 +599,7 @@ class SharkAugmentor:
             "mechanism_aware",
         ):
             raise ValueError(
-                "Unsupported SHARK.SYNTHETIC.SEED_SELECTION: "
+                "Unsupported GFM4MTSAD.SYNTHETIC.SEED_SELECTION: "
                 f"{self.seed_selection}"
             )
         if self.candidate_generator != "graph_var" and (self.normal_mechanism is None or self.edit_mode != "direct_quantile"):
@@ -627,7 +627,7 @@ class SharkAugmentor:
             "frozen_gfm_teacher",
         ):
             raise ValueError(
-                "Unsupported SHARK.SYNTHETIC.NEGATIVE_SCREENING_MODE: "
+                "Unsupported GFM4MTSAD.SYNTHETIC.NEGATIVE_SCREENING_MODE: "
                 f"{self.negative_screening_mode}"
             )
         if not 0.0 < self.frontend_primary_nonlegacy_weight <= 1.0:
@@ -663,7 +663,7 @@ class SharkAugmentor:
                 "SCOPE_AWARE_NEGATIVE_MAX_NODES must be >= MIN_NODES"
             )
         if not 0.0 < self.positive_time_ratio <= 1.0:
-            raise ValueError("SHARK.CONTRAST.POSITIVE_TIME_RATIO must satisfy 0 < ratio <= 1")
+            raise ValueError("GFM4MTSAD.CONTRAST.POSITIVE_TIME_RATIO must satisfy 0 < ratio <= 1")
         if (
             self.graph_consistent_positive_enable
             and self.graph_consistent_positive_candidates < 2
@@ -698,32 +698,32 @@ class SharkAugmentor:
             "hybrid_valid",
             "direct_quantile",
         ):
-            raise ValueError(f"Unsupported SHARK.SYNTHETIC.EDIT_MODE: {self.edit_mode}")
+            raise ValueError(f"Unsupported GFM4MTSAD.SYNTHETIC.EDIT_MODE: {self.edit_mode}")
         unsupported_fallbacks = set(self.hybrid_fallback_types) - set(self.DIRECT_FALLBACK_TYPES)
         if unsupported_fallbacks:
             raise ValueError(
-                "Unsupported SHARK.SYNTHETIC.HYBRID_FALLBACK_TYPES: "
+                "Unsupported GFM4MTSAD.SYNTHETIC.HYBRID_FALLBACK_TYPES: "
                 f"{sorted(unsupported_fallbacks)}"
             )
         if not self.hybrid_fallback_types:
-            raise ValueError("SHARK.SYNTHETIC.HYBRID_FALLBACK_TYPES must not be empty")
+            raise ValueError("GFM4MTSAD.SYNTHETIC.HYBRID_FALLBACK_TYPES must not be empty")
         if not 0.0 < self.synthetic_time_ratio_min <= self.synthetic_time_ratio_max <= 1.0:
-            raise ValueError("SHARK.SYNTHETIC.TIME_RATIO_MIN/MAX must satisfy 0 < min <= max <= 1")
+            raise ValueError("GFM4MTSAD.SYNTHETIC.TIME_RATIO_MIN/MAX must satisfy 0 < min <= max <= 1")
         if self.segment_length_policy not in ("uniform_ratio", "event_scale_balanced"):
             raise ValueError(
-                "Unsupported SHARK.SYNTHETIC.SEGMENT_LENGTH_POLICY: "
+                "Unsupported GFM4MTSAD.SYNTHETIC.SEGMENT_LENGTH_POLICY: "
                 f"{self.segment_length_policy}"
             )
         if len(self.event_scale_probabilities) != 3 or any(
             value < 0.0 for value in self.event_scale_probabilities
         ) or sum(self.event_scale_probabilities) <= 0.0:
             raise ValueError(
-                "SHARK.SYNTHETIC.EVENT_SCALE_PROBABILITIES must contain three "
+                "GFM4MTSAD.SYNTHETIC.EVENT_SCALE_PROBABILITIES must contain three "
                 "nonnegative values with positive sum"
             )
         if not 1 <= self.event_scale_micro_min <= self.event_scale_micro_max:
             raise ValueError(
-                "SHARK.SYNTHETIC.EVENT_SCALE_MICRO_MIN/MAX must be positive and ordered"
+                "GFM4MTSAD.SYNTHETIC.EVENT_SCALE_MICRO_MIN/MAX must be positive and ordered"
             )
         if not (
             0.0 < self.event_scale_persistent_ratio_min
@@ -731,7 +731,7 @@ class SharkAugmentor:
             <= 1.0
         ):
             raise ValueError(
-                "SHARK.SYNTHETIC.EVENT_SCALE_PERSISTENT_RATIO_MIN/MAX must satisfy "
+                "GFM4MTSAD.SYNTHETIC.EVENT_SCALE_PERSISTENT_RATIO_MIN/MAX must satisfy "
                 "0 < min <= max <= 1"
             )
         for name, value in (
@@ -742,13 +742,13 @@ class SharkAugmentor:
             ("DIRECT_QUANTILE_CAP", self.direct_quantile_cap),
         ):
             if not 0.5 <= value < 1.0:
-                raise ValueError(f"SHARK.SYNTHETIC.{name} must satisfy 0.5 <= value < 1.0")
+                raise ValueError(f"GFM4MTSAD.SYNTHETIC.{name} must satisfy 0.5 <= value < 1.0")
         if self.direct_quantile_cap < max(
             self.direct_quantile_start,
             self.direct_quantile_end,
         ):
             raise ValueError(
-                "SHARK.SYNTHETIC.DIRECT_QUANTILE_CAP must be no smaller than "
+                "GFM4MTSAD.SYNTHETIC.DIRECT_QUANTILE_CAP must be no smaller than "
                 "DIRECT_QUANTILE_START/END"
             )
         if self.direct_quantile_acceptance_mode not in (
@@ -757,7 +757,7 @@ class SharkAugmentor:
             "soft_weighted",
         ):
             raise ValueError(
-                "Unsupported SHARK.SYNTHETIC.DIRECT_QUANTILE_ACCEPTANCE_MODE: "
+                "Unsupported GFM4MTSAD.SYNTHETIC.DIRECT_QUANTILE_ACCEPTANCE_MODE: "
                 f"{self.direct_quantile_acceptance_mode}"
             )
         if self.direct_quantile_reference_scale_mode not in (
@@ -765,7 +765,7 @@ class SharkAugmentor:
             "iqr_std_fallback",
         ):
             raise ValueError(
-                "Unsupported SHARK.SYNTHETIC."
+                "Unsupported GFM4MTSAD.SYNTHETIC."
                 "DIRECT_QUANTILE_REFERENCE_SCALE_MODE: "
                 f"{self.direct_quantile_reference_scale_mode}"
             )
@@ -774,18 +774,18 @@ class SharkAugmentor:
             "rms_rescue",
         ):
             raise ValueError(
-                "Unsupported SHARK.SYNTHETIC."
+                "Unsupported GFM4MTSAD.SYNTHETIC."
                 "DIRECT_QUANTILE_UPPER_BOUND_MODE: "
                 f"{self.direct_quantile_upper_bound_mode}"
             )
         if not 0.0 < self.direct_quantile_soft_min_weight <= 1.0:
             raise ValueError(
-                "SHARK.SYNTHETIC.DIRECT_QUANTILE_SOFT_MIN_WEIGHT must satisfy "
+                "GFM4MTSAD.SYNTHETIC.DIRECT_QUANTILE_SOFT_MIN_WEIGHT must satisfy "
                 "0 < weight <= 1"
             )
         if self.direct_quantile_soft_power <= 0.0:
             raise ValueError(
-                "SHARK.SYNTHETIC.DIRECT_QUANTILE_SOFT_POWER must be positive"
+                "GFM4MTSAD.SYNTHETIC.DIRECT_QUANTILE_SOFT_POWER must be positive"
             )
         if self.direct_mechanism_score_mode not in (
             "legacy_shared",
@@ -794,7 +794,7 @@ class SharkAugmentor:
             "adaptive_graph_var",
         ):
             raise ValueError(
-                "Unsupported SHARK.SYNTHETIC.DIRECT_MECHANISM_SCORE_MODE: "
+                "Unsupported GFM4MTSAD.SYNTHETIC.DIRECT_MECHANISM_SCORE_MODE: "
                 f"{self.direct_mechanism_score_mode}"
             )
         if self.direct_candidate_support_mode not in (
@@ -804,7 +804,7 @@ class SharkAugmentor:
             "adaptive_empirical",
         ):
             raise ValueError(
-                "Unsupported SHARK.SYNTHETIC.DIRECT_CANDIDATE_SUPPORT_MODE: "
+                "Unsupported GFM4MTSAD.SYNTHETIC.DIRECT_CANDIDATE_SUPPORT_MODE: "
                 f"{self.direct_candidate_support_mode}"
             )
         if not (
@@ -813,21 +813,21 @@ class SharkAugmentor:
             <= 1.0
         ):
             raise ValueError(
-                "SHARK.SYNTHETIC direct candidate support quantiles must satisfy "
+                "GFM4MTSAD.SYNTHETIC direct candidate support quantiles must satisfy "
                 "0 <= low < high <= 1"
             )
         if self.wf_max_temporal_drift < 0.0:
             raise ValueError(
-                "SHARK.OTRCL.FINE_MAX_TEMPORAL_DRIFT must be nonnegative"
+                "GFM4MTSAD.OTRCL.FINE_MAX_TEMPORAL_DRIFT must be nonnegative"
             )
         if self.wf_min_relational_margin < 0.0:
             raise ValueError(
-                "SHARK.OTRCL.FINE_MIN_RELATIONAL_MARGIN_OVER_COARSE "
+                "GFM4MTSAD.OTRCL.FINE_MIN_RELATIONAL_MARGIN_OVER_COARSE "
                 "must be nonnegative"
             )
         if self.wf_relation_metric != "raw_abs_pearson":
             raise ValueError(
-                "Unsupported SHARK.OTRCL.FINE_RELATION_METRIC: "
+                "Unsupported GFM4MTSAD.OTRCL.FINE_RELATION_METRIC: "
                 f"{self.wf_relation_metric}"
             )
 
@@ -1460,9 +1460,9 @@ class SharkAugmentor:
                 collect_diagnostics=collect_diagnostics,
             )
         if self.synthetic_mode != "relation_function_breaking":
-            raise ValueError(f"Unsupported SHARK.SYNTHETIC.MODE: {self.synthetic_mode}")
+            raise ValueError(f"Unsupported GFM4MTSAD.SYNTHETIC.MODE: {self.synthetic_mode}")
         if not self.synthetic_types:
-            raise ValueError("SHARK.SYNTHETIC.TYPES must contain at least one counterfactual edit")
+            raise ValueError("GFM4MTSAD.SYNTHETIC.TYPES must contain at least one counterfactual edit")
         if self.edit_mode == "direct_quantile":
             unsupported_types = set(self.synthetic_types) - set(self.DIRECT_FALLBACK_TYPES)
             if not unsupported_types:

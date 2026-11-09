@@ -40,7 +40,7 @@ class TemporalCounterfactualGenerator:
 
     @classmethod
     def from_config(cls, cfg):
-        settings = cfg.SHARK.OTRCL
+        settings = cfg.GFM4MTSAD.OTRCL
         return cls(
             positive_scale_max=settings.POSITIVE_SCALE_MAX,
             positive_shift_max=settings.POSITIVE_SHIFT_MAX,

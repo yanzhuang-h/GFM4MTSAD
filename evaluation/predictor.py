@@ -1,20 +1,20 @@
 import numpy as np
 import torch
 
-from models.shark.causal_rolling_calibration import (
+from models.gfm4mtsad.causal_rolling_calibration import (
     causal_rolling_robust_calibration,
 )
-from models.shark.node_to_time_reliability_gate import (
+from models.gfm4mtsad.node_to_time_reliability_gate import (
     normal_validity_reliability_gate,
 )
-from models.shark.predictor_shark import SharkPredictor
-from models.shark.unified_node_to_time import (
+from models.gfm4mtsad.predictor_gfm4mtsad import GFM4MTSADPredictor
+from models.gfm4mtsad.unified_node_to_time import (
     event_preserving_temporal_consensus,
 )
 
 
-class UnifiedNodeToTimePredictor(SharkPredictor):
-    """The fixed, backend-neutral final score used by unified SHARK v1."""
+class UnifiedNodeToTimePredictor(GFM4MTSADPredictor):
+    """The fixed, backend-neutral final score used by unified GFM4MTSAD v1."""
 
     def _apply_node_to_time(self, raw):
         raw = np.asarray(raw, dtype=np.float64)
@@ -32,7 +32,7 @@ class UnifiedNodeToTimePredictor(SharkPredictor):
         gate["selected_source"] = (
             "unified_causal" if gate["causal_selected"] else "unified_raw"
         )
-        width = int(self.cfg.SHARK.TEMPORAL_CONSENSUS.WIDTH)
+        width = int(self.cfg.GFM4MTSAD.TEMPORAL_CONSENSUS.WIDTH)
         final = event_preserving_temporal_consensus(gated, width=width)
         return final, causal, gated, gate
 
@@ -54,7 +54,7 @@ class UnifiedNodeToTimePredictor(SharkPredictor):
         self.test_score_sources["unified_causal"] = causal
         self.test_score_sources["unified_reliability_gated"] = gated
         self.test_score_sources["unified_node_to_time"] = final
-        self.cfg.SHARK.EVAL.SCORE_SOURCE = "unified_node_to_time"
+        self.cfg.GFM4MTSAD.EVAL.SCORE_SOURCE = "unified_node_to_time"
         return final, labels, node_scores
 
     @torch.no_grad()
@@ -62,12 +62,12 @@ class UnifiedNodeToTimePredictor(SharkPredictor):
         raw, labels = super()._get_reference_outputs(
             loader,
             description,
-            score_source="shark_head",
+            score_source="gfm4mtsad_head",
         )
         final, causal, gated, _ = self._apply_node_to_time(raw)
         split = {
-            "shark train scores": "train",
-            "shark validation scores": "validation",
+            "gfm4mtsad train scores": "train",
+            "gfm4mtsad validation scores": "validation",
         }.get(description)
         if split is not None:
             setattr(self, f"{split}_scores_before_causal_calibration", raw.copy())
@@ -149,7 +149,7 @@ class InformationPreservingPredictor(UnifiedNodeToTimePredictor):
 
         device = next(self.model.parameters()).device
         with patch(
-            "models.shark.predictor_shark.prepare_inputs",
+            "models.gfm4mtsad.predictor_gfm4mtsad.prepare_inputs",
             lambda values: prepare_on_device(values, device),
         ):
             return super().predict()

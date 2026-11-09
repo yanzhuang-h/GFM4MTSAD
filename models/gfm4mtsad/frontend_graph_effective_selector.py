@@ -18,7 +18,7 @@ class FrontendGraphEffectiveSelector:
     EPS = 1e-8
 
     def __init__(self, cfg):
-        synthetic = cfg.SHARK.SYNTHETIC
+        synthetic = cfg.GFM4MTSAD.SYNTHETIC
         self.d_fd_low = float(
             getattr(synthetic, "FRONTEND_EFFECTIVE_D_FD_LOW", 0.25)
         )

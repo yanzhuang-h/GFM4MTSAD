@@ -1,15 +1,15 @@
-from models.shark.information_preserving_residual import (
+from models.gfm4mtsad.information_preserving_residual import (
     InformationPreservingResidualAdapter,
 )
-from models.shark.modeling_unified_shark import UnifiedSHARK
+from models.gfm4mtsad.modeling_unified_gfm4mtsad import UnifiedGFM4MTSAD
 
 
-class InformationPreservingUnifiedSHARK(UnifiedSHARK):
-    """Unified SHARK plus one backend-neutral information residual."""
+class InformationPreservingUnifiedGFM4MTSAD(UnifiedGFM4MTSAD):
+    """Unified GFM4MTSAD plus one backend-neutral information residual."""
 
     def __init__(self, cfg):
         super().__init__(cfg)
-        settings = cfg.SHARK.INFORMATION_PRESERVING_RESIDUAL
+        settings = cfg.GFM4MTSAD.INFORMATION_PRESERVING_RESIDUAL
         spec = self.gfm.backend_spec()
         self.information_residual = InformationPreservingResidualAdapter(
             source_dim=int(settings.SOURCE_DIM),
@@ -49,7 +49,7 @@ class InformationPreservingUnifiedSHARK(UnifiedSHARK):
         labels=None,
         return_dict=True,
     ):
-        """Run the trainable SHARK path from one cached frozen frontend."""
+        """Run the trainable GFM4MTSAD path from one cached frozen frontend."""
         if not self._bridge_initialized:
             raise RuntimeError("Unified Token Bridge must be initialized first")
         outputs = self._forward_from_frontend(
@@ -79,7 +79,7 @@ class InformationPreservingUnifiedSHARK(UnifiedSHARK):
         summary = dict(super().trainable_parameter_summary())
         summary.update(self.information_residual.diagnostics())
         summary.update({
-            "formal_architecture": "three_module_unified_shark_ipra_v1",
+            "formal_architecture": "three_module_unified_gfm4mtsad_ipra_v1",
             "information_residual_location": "shared_gfm_output_boundary",
         })
         return summary

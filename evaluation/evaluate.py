@@ -6,10 +6,10 @@ import sys
 import torch
 from yacs.config import CfgNode
 from training.assets import ROOT, sha256, asset_path
-from training.config_merge import _merge_verified_source_cfg
+from training.compatibility import normalize_legacy_config, load_normal_mechanism
 from training.data import nested_digest
 from training.pipeline import write_json
-from training.joint import InformationPreservingUnifiedSHARK
+from training.joint import InformationPreservingUnifiedGFM4MTSAD
 from evaluation.predictor import InformationPreservingPredictor
 from utils.misc import set_seeds
 
@@ -33,13 +33,14 @@ def evaluate(args):
         raise ValueError('Checkpoint/config mismatch')
     if int(checkpoint['epoch']) + 1 != audit['selected_epoch_1based']:
         raise ValueError('Checkpoint epoch mismatch')
+    cfg = normalize_legacy_config(cfg)
     cfg.DATA.BASE_DIR = asset_path(args.assets, 'data_dir')
     cfg.ANOMALYGFM.CHECKPOINT_PATH = asset_path(args.assets, 'anomalygfm_checkpoint', required=args.backend == 'anomalygfm')
     cfg.ANOMALYGFM.SOURCE_MODEL_PATH = asset_path(args.assets, 'anomalygfm_source', required=args.backend == 'anomalygfm')
     if args.backend == 'owleye':
-        cfg.SHARK.GFM_BACKEND.CHECKPOINT_PATH = asset_path(args.assets, 'owleye_checkpoint')
-        cfg.SHARK.GFM_BACKEND.SOURCE_MODEL_PATH = asset_path(args.assets, 'owleye_source')
-    cfg.SHARK.EVAL.RESULT_DIR = str(args.output.resolve()/'scores')
+        cfg.GFM4MTSAD.GFM_BACKEND.CHECKPOINT_PATH = asset_path(args.assets, 'owleye_checkpoint')
+        cfg.GFM4MTSAD.GFM_BACKEND.SOURCE_MODEL_PATH = asset_path(args.assets, 'owleye_source')
+    cfg.GFM4MTSAD.EVAL.RESULT_DIR = str(args.output.resolve()/'scores')
     cfg.DATA_LOADER.NUM_WORKERS = 0
     cfg.DATA_LOADER.PIN_MEMORY = False
     torch.set_num_threads(args.threads)
@@ -47,7 +48,7 @@ def evaluate(args):
     device = torch.device(args.device)
     if device.type == 'cuda':
         torch.cuda.set_device(device)
-    model = InformationPreservingUnifiedSHARK(cfg).to(device)
+    model = InformationPreservingUnifiedGFM4MTSAD(cfg).to(device)
     model.load_state_dict(checkpoint['model_state'], strict=True)
     reference = torch.load(run/'evaluation_reference.pt', map_location='cpu', weights_only=False)
     for name, value in reference.items():
@@ -55,7 +56,7 @@ def evaluate(args):
             raise ValueError('Unknown saved reference: ' + name)
         setattr(model.head, name, value.to(device))
     model._bridge_initialized = True
-    model._shark_normal_mechanism = torch.load(run/'normal_mechanism.pt', map_location='cpu', weights_only=False)
+    model._gfm4mtsad_normal_mechanism = load_normal_mechanism(run/'normal_mechanism.pt')
     model.eval().requires_grad_(False)
     before = nested_digest((model.state_dict(), {n:getattr(model.head,n) for n in reference}))
     args.output.mkdir(parents=True, exist_ok=False)

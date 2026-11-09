@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.shark.gfm_backend import (
+from models.gfm4mtsad.gfm_backend import (
     GFMBackendContract,
     GFMBackendInput,
     GFMBackendSpec,
@@ -27,7 +27,7 @@ def _load_source_class(path):
     path = Path(path).resolve()
     if not path.exists():
         raise FileNotFoundError(f"OWLEYE source model not found: {path}")
-    module_name = f"_shark_owleye_source_{abs(hash(str(path)))}"
+    module_name = f"_gfm4mtsad_owleye_source_{abs(hash(str(path)))}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot load OWLEYE source model: {path}")
@@ -62,12 +62,12 @@ def _discover_source_model(checkpoint_path):
 
 
 class OWLEYEBackend(nn.Module, GFMBackendContract):
-    """Frozen OWLEYE dictionary runtime with SHARK's standard GFM outputs.
+    """Frozen OWLEYE dictionary runtime with GFM4MTSAD's standard GFM outputs.
 
     The released checkpoint contains both the neural parameters and the four
     source-domain pattern dictionaries.  MTS sensor windows are interpreted as
     small graphs: the shared Token Bridge supplies 64D node attributes and the
-    SHARK Pearson builder supplies graph structure.
+    GFM4MTSAD Pearson builder supplies graph structure.
     """
 
     def __init__(
@@ -224,7 +224,7 @@ class OWLEYEBackend(nn.Module, GFMBackendContract):
 
     @classmethod
     def from_config(cls, cfg):
-        settings = cfg.SHARK.GFM_BACKEND
+        settings = cfg.GFM4MTSAD.GFM_BACKEND
         return cls(
             checkpoint_path=str(settings.CHECKPOINT_PATH),
             source_model_path=str(

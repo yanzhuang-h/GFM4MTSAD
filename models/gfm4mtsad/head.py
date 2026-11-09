@@ -5,97 +5,97 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class SharkHead(nn.Module):
+class GFM4MTSADHead(nn.Module):
     def __init__(self, cfg, embedding_dim=None):
-        super(SharkHead, self).__init__()
+        super(GFM4MTSADHead, self).__init__()
         if embedding_dim is None:
             embedding_dim = cfg.ANOMALYGFM.EMBEDDING_DIM
-        hidden_dim = cfg.SHARK.HEAD.HIDDEN_DIM
-        dropout = cfg.SHARK.HEAD.DROPOUT
+        hidden_dim = cfg.GFM4MTSAD.HEAD.HIDDEN_DIM
+        dropout = cfg.GFM4MTSAD.HEAD.DROPOUT
 
-        self.arch = cfg.SHARK.HEAD.ARCH
-        self.topk = cfg.SHARK.HEAD.TOPK
-        self.residual_scale = cfg.SHARK.HEAD.RESIDUAL_SCALE
-        self.fusion = cfg.SHARK.HEAD.FUSION
-        self.eps = cfg.SHARK.HEAD.EPS
-        self.expert_names = tuple(cfg.SHARK.HEAD.EXPERT_NAMES)
-        self.gate_temperature = cfg.SHARK.HEAD.GATE_TEMPERATURE
+        self.arch = cfg.GFM4MTSAD.HEAD.ARCH
+        self.topk = cfg.GFM4MTSAD.HEAD.TOPK
+        self.residual_scale = cfg.GFM4MTSAD.HEAD.RESIDUAL_SCALE
+        self.fusion = cfg.GFM4MTSAD.HEAD.FUSION
+        self.eps = cfg.GFM4MTSAD.HEAD.EPS
+        self.expert_names = tuple(cfg.GFM4MTSAD.HEAD.EXPERT_NAMES)
+        self.gate_temperature = cfg.GFM4MTSAD.HEAD.GATE_TEMPERATURE
         self.moe_residual_enable = bool(
-            getattr(cfg.SHARK.HEAD, "MOE_RESIDUAL_ENABLE", False)
+            getattr(cfg.GFM4MTSAD.HEAD, "MOE_RESIDUAL_ENABLE", False)
         )
         self.moe_residual_scale = max(
-            float(getattr(cfg.SHARK.HEAD, "MOE_RESIDUAL_SCALE", 0.1)), 0.0
+            float(getattr(cfg.GFM4MTSAD.HEAD, "MOE_RESIDUAL_SCALE", 0.1)), 0.0
         )
         self.moe_gate_min_weight = min(
-            max(float(getattr(cfg.SHARK.HEAD, "MOE_GATE_MIN_WEIGHT", 0.0)), 0.0),
+            max(float(getattr(cfg.GFM4MTSAD.HEAD, "MOE_GATE_MIN_WEIGHT", 0.0)), 0.0),
             1.0,
         )
-        self.evidence_source_names = tuple(cfg.SHARK.HEAD.EVIDENCE_SOURCE_NAMES)
-        self.conservative_fusion = cfg.SHARK.HEAD.CONSERVATIVE_FUSION
-        self.conservative_sources = tuple(cfg.SHARK.HEAD.CONSERVATIVE_SOURCES)
-        self.conservative_temperature = cfg.SHARK.HEAD.CONSERVATIVE_TEMPERATURE
-        self.detach_raw_evidence = cfg.SHARK.HEAD.DETACH_RAW_EVIDENCE
-        self.evidence_fusion = cfg.SHARK.HEAD.EVIDENCE_FUSION
-        self.evidence_fusion_mode = cfg.SHARK.HEAD.EVIDENCE_FUSION_MODE
-        self.evidence_fusion_topk = cfg.SHARK.HEAD.EVIDENCE_FUSION_TOPK
-        self.mil_node_source = cfg.SHARK.HEAD.MIL_NODE_SOURCE
-        self.mil_node_calibration = cfg.SHARK.HEAD.MIL_NODE_CALIBRATION
-        self.mil_pooling = cfg.SHARK.HEAD.MIL_POOLING
-        self.mil_temperature = cfg.SHARK.HEAD.MIL_TEMPERATURE
-        self.mil_topk = cfg.SHARK.HEAD.MIL_TOPK
-        self.evidence_floor_source = cfg.SHARK.HEAD.EVIDENCE_FLOOR_SOURCE
-        self.evidence_floor_weight = cfg.SHARK.HEAD.EVIDENCE_FLOOR_WEIGHT
-        self.decoupled_window_temperature = cfg.SHARK.HEAD.DECOUPLED_WINDOW_TEMPERATURE
-        self.decoupled_window_source_weight = cfg.SHARK.HEAD.DECOUPLED_WINDOW_SOURCE_WEIGHT
-        self.safe_calibrated_sources = tuple(cfg.SHARK.HEAD.SAFE_CALIBRATED_SOURCES)
-        self.safe_calibrated_topk = cfg.SHARK.HEAD.SAFE_CALIBRATED_TOPK
-        self.safe_calibrated_weight = cfg.SHARK.HEAD.SAFE_CALIBRATED_WEIGHT
-        self.safe_calibrated_min_confidence = cfg.SHARK.HEAD.SAFE_CALIBRATED_MIN_CONFIDENCE
-        self.safe_calibrated_cap = cfg.SHARK.HEAD.SAFE_CALIBRATED_CAP
-        self.source_consistent_sources = tuple(cfg.SHARK.HEAD.SOURCE_CONSISTENT_SOURCES)
-        self.source_consistent_topk = cfg.SHARK.HEAD.SOURCE_CONSISTENT_TOPK
-        self.source_consistent_agg = cfg.SHARK.HEAD.SOURCE_CONSISTENT_AGG
-        self.source_consistent_min_confidence = cfg.SHARK.HEAD.SOURCE_CONSISTENT_MIN_CONFIDENCE
-        self.source_consistent_cap = cfg.SHARK.HEAD.SOURCE_CONSISTENT_CAP
-        self.agreement_sources = tuple(cfg.SHARK.HEAD.AGREEMENT_SOURCES)
-        self.agreement_topk = cfg.SHARK.HEAD.AGREEMENT_TOPK
-        self.agreement_agg = cfg.SHARK.HEAD.AGREEMENT_AGG
-        self.agreement_bonus_weight = cfg.SHARK.HEAD.AGREEMENT_BONUS_WEIGHT
-        self.agreement_min_confidence = cfg.SHARK.HEAD.AGREEMENT_MIN_CONFIDENCE
-        self.agreement_cap = cfg.SHARK.HEAD.AGREEMENT_CAP
-        self.contrast_sources = tuple(cfg.SHARK.HEAD.CONTRAST_SOURCES)
-        self.contrast_topk = cfg.SHARK.HEAD.CONTRAST_TOPK
-        self.contrast_agg = cfg.SHARK.HEAD.CONTRAST_AGG
-        self.contrast_weight = cfg.SHARK.HEAD.CONTRAST_WEIGHT
-        self.contrast_min_confidence = cfg.SHARK.HEAD.CONTRAST_MIN_CONFIDENCE
-        self.contrast_cap = cfg.SHARK.HEAD.CONTRAST_CAP
-        self.relation_aware_base_source = cfg.SHARK.HEAD.RELATION_AWARE_BASE_SOURCE
-        self.relation_aware_sources = tuple(cfg.SHARK.HEAD.RELATION_AWARE_SOURCES)
-        self.relation_aware_weight = cfg.SHARK.HEAD.RELATION_AWARE_WEIGHT
-        self.relation_aware_gate_temperature = cfg.SHARK.HEAD.RELATION_AWARE_GATE_TEMPERATURE
-        self.relation_aware_margin = cfg.SHARK.HEAD.RELATION_AWARE_MARGIN
-        self.relation_aware_bonus_cap = cfg.SHARK.HEAD.RELATION_AWARE_BONUS_CAP
-        self.relation_aware_min_confidence = cfg.SHARK.HEAD.RELATION_AWARE_MIN_CONFIDENCE
-        self.relation_aware_cap = cfg.SHARK.HEAD.RELATION_AWARE_CAP
-        self.relation_aware_low_base_gate_enable = cfg.SHARK.HEAD.RELATION_AWARE_LOW_BASE_GATE_ENABLE
-        self.relation_aware_low_base_threshold = cfg.SHARK.HEAD.RELATION_AWARE_LOW_BASE_THRESHOLD
-        self.relation_aware_low_base_temperature = cfg.SHARK.HEAD.RELATION_AWARE_LOW_BASE_TEMPERATURE
-        self.source_reliability_temperature = cfg.SHARK.HEAD.SOURCE_RELIABILITY_TEMPERATURE
-        self.source_reliability_consensus_topk = cfg.SHARK.HEAD.SOURCE_RELIABILITY_CONSENSUS_TOPK
-        self.source_reliability_min_weight = cfg.SHARK.HEAD.SOURCE_RELIABILITY_MIN_WEIGHT
-        self.source_reliability_enable = cfg.SHARK.HEAD.SOURCE_RELIABILITY_ENABLE
-        self.source_reliability_prior_weight = cfg.SHARK.HEAD.SOURCE_RELIABILITY_PRIOR_WEIGHT
-        self.source_reliability_min = cfg.SHARK.HEAD.SOURCE_RELIABILITY_MIN
-        self.source_reliability_max = cfg.SHARK.HEAD.SOURCE_RELIABILITY_MAX
-        self.source_reliability_direct_floor = cfg.SHARK.HEAD.SOURCE_RELIABILITY_DIRECT_FLOOR
-        self.normal_calibration_enable = cfg.SHARK.HEAD.NORMAL_CALIBRATION_ENABLE
-        self.normal_calibration_mode = cfg.SHARK.HEAD.NORMAL_CALIBRATION_MODE
-        self.normal_calibration_max_samples = cfg.SHARK.HEAD.NORMAL_CALIBRATION_MAX_SAMPLES
-        self.normal_calibration_min_scale = cfg.SHARK.HEAD.NORMAL_CALIBRATION_MIN_SCALE
+        self.evidence_source_names = tuple(cfg.GFM4MTSAD.HEAD.EVIDENCE_SOURCE_NAMES)
+        self.conservative_fusion = cfg.GFM4MTSAD.HEAD.CONSERVATIVE_FUSION
+        self.conservative_sources = tuple(cfg.GFM4MTSAD.HEAD.CONSERVATIVE_SOURCES)
+        self.conservative_temperature = cfg.GFM4MTSAD.HEAD.CONSERVATIVE_TEMPERATURE
+        self.detach_raw_evidence = cfg.GFM4MTSAD.HEAD.DETACH_RAW_EVIDENCE
+        self.evidence_fusion = cfg.GFM4MTSAD.HEAD.EVIDENCE_FUSION
+        self.evidence_fusion_mode = cfg.GFM4MTSAD.HEAD.EVIDENCE_FUSION_MODE
+        self.evidence_fusion_topk = cfg.GFM4MTSAD.HEAD.EVIDENCE_FUSION_TOPK
+        self.mil_node_source = cfg.GFM4MTSAD.HEAD.MIL_NODE_SOURCE
+        self.mil_node_calibration = cfg.GFM4MTSAD.HEAD.MIL_NODE_CALIBRATION
+        self.mil_pooling = cfg.GFM4MTSAD.HEAD.MIL_POOLING
+        self.mil_temperature = cfg.GFM4MTSAD.HEAD.MIL_TEMPERATURE
+        self.mil_topk = cfg.GFM4MTSAD.HEAD.MIL_TOPK
+        self.evidence_floor_source = cfg.GFM4MTSAD.HEAD.EVIDENCE_FLOOR_SOURCE
+        self.evidence_floor_weight = cfg.GFM4MTSAD.HEAD.EVIDENCE_FLOOR_WEIGHT
+        self.decoupled_window_temperature = cfg.GFM4MTSAD.HEAD.DECOUPLED_WINDOW_TEMPERATURE
+        self.decoupled_window_source_weight = cfg.GFM4MTSAD.HEAD.DECOUPLED_WINDOW_SOURCE_WEIGHT
+        self.safe_calibrated_sources = tuple(cfg.GFM4MTSAD.HEAD.SAFE_CALIBRATED_SOURCES)
+        self.safe_calibrated_topk = cfg.GFM4MTSAD.HEAD.SAFE_CALIBRATED_TOPK
+        self.safe_calibrated_weight = cfg.GFM4MTSAD.HEAD.SAFE_CALIBRATED_WEIGHT
+        self.safe_calibrated_min_confidence = cfg.GFM4MTSAD.HEAD.SAFE_CALIBRATED_MIN_CONFIDENCE
+        self.safe_calibrated_cap = cfg.GFM4MTSAD.HEAD.SAFE_CALIBRATED_CAP
+        self.source_consistent_sources = tuple(cfg.GFM4MTSAD.HEAD.SOURCE_CONSISTENT_SOURCES)
+        self.source_consistent_topk = cfg.GFM4MTSAD.HEAD.SOURCE_CONSISTENT_TOPK
+        self.source_consistent_agg = cfg.GFM4MTSAD.HEAD.SOURCE_CONSISTENT_AGG
+        self.source_consistent_min_confidence = cfg.GFM4MTSAD.HEAD.SOURCE_CONSISTENT_MIN_CONFIDENCE
+        self.source_consistent_cap = cfg.GFM4MTSAD.HEAD.SOURCE_CONSISTENT_CAP
+        self.agreement_sources = tuple(cfg.GFM4MTSAD.HEAD.AGREEMENT_SOURCES)
+        self.agreement_topk = cfg.GFM4MTSAD.HEAD.AGREEMENT_TOPK
+        self.agreement_agg = cfg.GFM4MTSAD.HEAD.AGREEMENT_AGG
+        self.agreement_bonus_weight = cfg.GFM4MTSAD.HEAD.AGREEMENT_BONUS_WEIGHT
+        self.agreement_min_confidence = cfg.GFM4MTSAD.HEAD.AGREEMENT_MIN_CONFIDENCE
+        self.agreement_cap = cfg.GFM4MTSAD.HEAD.AGREEMENT_CAP
+        self.contrast_sources = tuple(cfg.GFM4MTSAD.HEAD.CONTRAST_SOURCES)
+        self.contrast_topk = cfg.GFM4MTSAD.HEAD.CONTRAST_TOPK
+        self.contrast_agg = cfg.GFM4MTSAD.HEAD.CONTRAST_AGG
+        self.contrast_weight = cfg.GFM4MTSAD.HEAD.CONTRAST_WEIGHT
+        self.contrast_min_confidence = cfg.GFM4MTSAD.HEAD.CONTRAST_MIN_CONFIDENCE
+        self.contrast_cap = cfg.GFM4MTSAD.HEAD.CONTRAST_CAP
+        self.relation_aware_base_source = cfg.GFM4MTSAD.HEAD.RELATION_AWARE_BASE_SOURCE
+        self.relation_aware_sources = tuple(cfg.GFM4MTSAD.HEAD.RELATION_AWARE_SOURCES)
+        self.relation_aware_weight = cfg.GFM4MTSAD.HEAD.RELATION_AWARE_WEIGHT
+        self.relation_aware_gate_temperature = cfg.GFM4MTSAD.HEAD.RELATION_AWARE_GATE_TEMPERATURE
+        self.relation_aware_margin = cfg.GFM4MTSAD.HEAD.RELATION_AWARE_MARGIN
+        self.relation_aware_bonus_cap = cfg.GFM4MTSAD.HEAD.RELATION_AWARE_BONUS_CAP
+        self.relation_aware_min_confidence = cfg.GFM4MTSAD.HEAD.RELATION_AWARE_MIN_CONFIDENCE
+        self.relation_aware_cap = cfg.GFM4MTSAD.HEAD.RELATION_AWARE_CAP
+        self.relation_aware_low_base_gate_enable = cfg.GFM4MTSAD.HEAD.RELATION_AWARE_LOW_BASE_GATE_ENABLE
+        self.relation_aware_low_base_threshold = cfg.GFM4MTSAD.HEAD.RELATION_AWARE_LOW_BASE_THRESHOLD
+        self.relation_aware_low_base_temperature = cfg.GFM4MTSAD.HEAD.RELATION_AWARE_LOW_BASE_TEMPERATURE
+        self.source_reliability_temperature = cfg.GFM4MTSAD.HEAD.SOURCE_RELIABILITY_TEMPERATURE
+        self.source_reliability_consensus_topk = cfg.GFM4MTSAD.HEAD.SOURCE_RELIABILITY_CONSENSUS_TOPK
+        self.source_reliability_min_weight = cfg.GFM4MTSAD.HEAD.SOURCE_RELIABILITY_MIN_WEIGHT
+        self.source_reliability_enable = cfg.GFM4MTSAD.HEAD.SOURCE_RELIABILITY_ENABLE
+        self.source_reliability_prior_weight = cfg.GFM4MTSAD.HEAD.SOURCE_RELIABILITY_PRIOR_WEIGHT
+        self.source_reliability_min = cfg.GFM4MTSAD.HEAD.SOURCE_RELIABILITY_MIN
+        self.source_reliability_max = cfg.GFM4MTSAD.HEAD.SOURCE_RELIABILITY_MAX
+        self.source_reliability_direct_floor = cfg.GFM4MTSAD.HEAD.SOURCE_RELIABILITY_DIRECT_FLOOR
+        self.normal_calibration_enable = cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_ENABLE
+        self.normal_calibration_mode = cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_MODE
+        self.normal_calibration_max_samples = cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_MAX_SAMPLES
+        self.normal_calibration_min_scale = cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_MIN_SCALE
         self.mil_reference_scale_floor_quantile = float(
-            cfg.SHARK.HEAD.MIL_REFERENCE_SCALE_FLOOR_QUANTILE
+            cfg.GFM4MTSAD.HEAD.MIL_REFERENCE_SCALE_FLOOR_QUANTILE
         )
-        self.normal_calibration_ecdf_temperature = cfg.SHARK.HEAD.NORMAL_CALIBRATION_ECDF_TEMPERATURE
+        self.normal_calibration_ecdf_temperature = cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_ECDF_TEMPERATURE
 
         if (
             not math.isfinite(self.mil_reference_scale_floor_quantile)
@@ -103,19 +103,19 @@ class SharkHead(nn.Module):
             or self.mil_reference_scale_floor_quantile >= 1.0
         ):
             raise ValueError(
-                "SHARK.HEAD.MIL_REFERENCE_SCALE_FLOOR_QUANTILE "
+                "GFM4MTSAD.HEAD.MIL_REFERENCE_SCALE_FLOOR_QUANTILE "
                 "必须是 [0.0, 1.0) 内的有限数"
             )
 
         if self.mil_node_source != "direct":
-            raise ValueError(f"Unsupported SHARK.HEAD.MIL_NODE_SOURCE: {self.mil_node_source}")
+            raise ValueError(f"Unsupported GFM4MTSAD.HEAD.MIL_NODE_SOURCE: {self.mil_node_source}")
         if self.mil_node_calibration != "sensor_zscore_upper":
             raise ValueError(
-                "Unsupported SHARK.HEAD.MIL_NODE_CALIBRATION: "
+                "Unsupported GFM4MTSAD.HEAD.MIL_NODE_CALIBRATION: "
                 f"{self.mil_node_calibration}"
             )
         if self.mil_pooling not in ("normalized_logsumexp", "topk_mean"):
-            raise ValueError(f"Unsupported SHARK.HEAD.MIL_POOLING: {self.mil_pooling}")
+            raise ValueError(f"Unsupported GFM4MTSAD.HEAD.MIL_POOLING: {self.mil_pooling}")
 
         num_sources = len(self.conservative_sources)
         num_protocol_sources = len(self.evidence_source_names)
@@ -158,28 +158,28 @@ class SharkHead(nn.Module):
         self.spike_head = self._make_expert(6, cfg)
         self.distribution_head = self._make_expert(6, cfg)
         self.graph_context_head = nn.Sequential(
-            nn.Linear(embedding_dim + 12, cfg.SHARK.HEAD.EXPERT_HIDDEN_DIM),
+            nn.Linear(embedding_dim + 12, cfg.GFM4MTSAD.HEAD.EXPERT_HIDDEN_DIM),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(cfg.SHARK.HEAD.EXPERT_HIDDEN_DIM, 1),
+            nn.Linear(cfg.GFM4MTSAD.HEAD.EXPERT_HIDDEN_DIM, 1),
         )
         self.gate_head = nn.Sequential(
-            nn.Linear(embedding_dim + 12, cfg.SHARK.HEAD.GATE_HIDDEN_DIM),
+            nn.Linear(embedding_dim + 12, cfg.GFM4MTSAD.HEAD.GATE_HIDDEN_DIM),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(cfg.SHARK.HEAD.GATE_HIDDEN_DIM, len(self.expert_names)),
+            nn.Linear(cfg.GFM4MTSAD.HEAD.GATE_HIDDEN_DIM, len(self.expert_names)),
         )
         self.conservative_gate = nn.Sequential(
-            nn.Linear(embedding_dim + 12, cfg.SHARK.HEAD.GATE_HIDDEN_DIM),
+            nn.Linear(embedding_dim + 12, cfg.GFM4MTSAD.HEAD.GATE_HIDDEN_DIM),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(cfg.SHARK.HEAD.GATE_HIDDEN_DIM, len(self.conservative_sources)),
+            nn.Linear(cfg.GFM4MTSAD.HEAD.GATE_HIDDEN_DIM, len(self.conservative_sources)),
         )
 
     def forward(self, node_embeddings, raw_node_scores, graph_embedding):
         self._check_shapes(node_embeddings, raw_node_scores, graph_embedding)
         if self.arch != "moe":
-            raise ValueError(f"Unsupported SHARK.HEAD.ARCH: {self.arch}")
+            raise ValueError(f"Unsupported GFM4MTSAD.HEAD.ARCH: {self.arch}")
 
         raw_log = torch.log(raw_node_scores.clamp_min(self.eps))
         residual = torch.tanh(
@@ -595,10 +595,10 @@ class SharkHead(nn.Module):
 
     def _make_expert(self, input_dim, cfg):
         return nn.Sequential(
-            nn.Linear(input_dim, cfg.SHARK.HEAD.EXPERT_HIDDEN_DIM),
+            nn.Linear(input_dim, cfg.GFM4MTSAD.HEAD.EXPERT_HIDDEN_DIM),
             nn.ReLU(),
-            nn.Dropout(cfg.SHARK.HEAD.DROPOUT),
-            nn.Linear(cfg.SHARK.HEAD.EXPERT_HIDDEN_DIM, 1),
+            nn.Dropout(cfg.GFM4MTSAD.HEAD.DROPOUT),
+            nn.Linear(cfg.GFM4MTSAD.HEAD.EXPERT_HIDDEN_DIM, 1),
         )
 
     def _score_stats(self, scores):
@@ -622,7 +622,7 @@ class SharkHead(nn.Module):
     def _conservative_scores(source_names, values):
         missing = [name for name in source_names if name not in values]
         if missing:
-            raise ValueError(f"Unsupported SHARK.HEAD.CONSERVATIVE_SOURCES: {missing}")
+            raise ValueError(f"Unsupported GFM4MTSAD.HEAD.CONSERVATIVE_SOURCES: {missing}")
         return torch.stack([values[name] for name in source_names], dim=1)
 
     def _fuse_evidence_scores(
@@ -648,7 +648,7 @@ class SharkHead(nn.Module):
 
         if self.evidence_fusion_mode == "softmax_floor":
             if self.evidence_floor_source not in evidence_values:
-                raise ValueError(f"Unsupported SHARK.HEAD.EVIDENCE_FLOOR_SOURCE: {self.evidence_floor_source}")
+                raise ValueError(f"Unsupported GFM4MTSAD.HEAD.EVIDENCE_FLOOR_SOURCE: {self.evidence_floor_source}")
             floor_weight = min(max(float(self.evidence_floor_weight), 0.0), 1.0)
             if self.evidence_floor_source in self.conservative_sources:
                 floor_idx = self.conservative_sources.index(self.evidence_floor_source)
@@ -694,7 +694,7 @@ class SharkHead(nn.Module):
                 source_consistent_score,
             )
 
-        raise ValueError(f"Unsupported SHARK.HEAD.EVIDENCE_FUSION_MODE: {self.evidence_fusion_mode}")
+        raise ValueError(f"Unsupported GFM4MTSAD.HEAD.EVIDENCE_FUSION_MODE: {self.evidence_fusion_mode}")
 
     def _calibrate_mil_node_scores(self, node_scores):
         if node_scores.dim() != 2:
@@ -765,7 +765,7 @@ class SharkHead(nn.Module):
             pooling_weights.scatter_(1, topk_indices, 1.0 / float(k))
             return topk_values.mean(dim=1), pooling_weights
 
-        raise ValueError(f"Unsupported SHARK.HEAD.MIL_POOLING: {pooling}")
+        raise ValueError(f"Unsupported GFM4MTSAD.HEAD.MIL_POOLING: {pooling}")
 
     def _decoupled_window_score(self, head_score, source_consistent_score):
         source_weight = max(float(self.decoupled_window_source_weight), 0.0)
@@ -882,7 +882,7 @@ class SharkHead(nn.Module):
         if self.relation_aware_base_source == "max":
             return torch.maximum(normal_ref_contrast_score, evidence_contrast_score)
         raise ValueError(
-            "Unsupported SHARK.HEAD.RELATION_AWARE_BASE_SOURCE: "
+            "Unsupported GFM4MTSAD.HEAD.RELATION_AWARE_BASE_SOURCE: "
             f"{self.relation_aware_base_source}"
         )
 
@@ -891,7 +891,7 @@ class SharkHead(nn.Module):
             base_idx = self.conservative_sources.index(self.evidence_floor_source)
             base_score = raw_scores[:, base_idx]
         else:
-            raise ValueError(f"Unsupported SHARK.HEAD.EVIDENCE_FLOOR_SOURCE: {self.evidence_floor_source}")
+            raise ValueError(f"Unsupported GFM4MTSAD.HEAD.EVIDENCE_FLOOR_SOURCE: {self.evidence_floor_source}")
 
         if not self.normal_calibration_enable or not bool(self.evidence_reference_fitted):
             return base_score
@@ -1072,7 +1072,7 @@ class SharkHead(nn.Module):
         prior = prior.detach().float().view(-1)
         if prior.numel() != len(self.evidence_source_names):
             raise ValueError(
-                "Source reliability size must match SHARK.HEAD.EVIDENCE_SOURCE_NAMES: "
+                "Source reliability size must match GFM4MTSAD.HEAD.EVIDENCE_SOURCE_NAMES: "
                 f"prior={tuple(prior.shape)}, sources={len(self.evidence_source_names)}"
             )
         prior = torch.where(torch.isfinite(prior), prior, torch.ones_like(prior))
@@ -1094,7 +1094,7 @@ class SharkHead(nn.Module):
         if mode == "topk_mean":
             k = min(max(int(topk), 1), scores.size(1))
             return scores.topk(k, dim=1).values.mean(dim=1)
-        raise ValueError(f"Unsupported SHARK.HEAD.SOURCE_CONSISTENT_AGG: {mode}")
+        raise ValueError(f"Unsupported GFM4MTSAD.HEAD.SOURCE_CONSISTENT_AGG: {mode}")
 
     @torch.no_grad()
     def set_mil_node_reference(self, mean, scale, values=None):
@@ -1169,7 +1169,7 @@ class SharkHead(nn.Module):
     def set_evidence_reference(self, mean, scale, values=None):
         if mean.numel() != len(self.conservative_sources) or scale.numel() != len(self.conservative_sources):
             raise ValueError(
-                "Evidence reference size must match SHARK.HEAD.CONSERVATIVE_SOURCES: "
+                "Evidence reference size must match GFM4MTSAD.HEAD.CONSERVATIVE_SOURCES: "
                 f"mean={tuple(mean.shape)}, scale={tuple(scale.shape)}, sources={len(self.conservative_sources)}"
             )
         mean = mean.to(device=self.evidence_reference_mean.device, dtype=self.evidence_reference_mean.dtype)
@@ -1181,7 +1181,7 @@ class SharkHead(nn.Module):
         if values is not None:
             if values.dim() != 2 or values.size(1) != len(self.conservative_sources):
                 raise ValueError(
-                    "Evidence reference values must match SHARK.HEAD.CONSERVATIVE_SOURCES: "
+                    "Evidence reference values must match GFM4MTSAD.HEAD.CONSERVATIVE_SOURCES: "
                     f"values={tuple(values.shape)}, sources={len(self.conservative_sources)}"
                 )
             values = values.detach()
@@ -1233,7 +1233,7 @@ class SharkHead(nn.Module):
             "soft_ecdf_two_sided",
         }:
             return self._normal_tail_evidence(scores)
-        raise ValueError(f"Unsupported SHARK.HEAD.NORMAL_CALIBRATION_MODE: {self.normal_calibration_mode}")
+        raise ValueError(f"Unsupported GFM4MTSAD.HEAD.NORMAL_CALIBRATION_MODE: {self.normal_calibration_mode}")
 
     def _normal_tail_evidence(self, scores):
         count = int(self.evidence_reference_count.item())
@@ -1260,7 +1260,7 @@ class SharkHead(nn.Module):
         elif mode.endswith("_two_sided"):
             p_values = 2.0 * torch.minimum(upper_tail, lower_tail)
         else:
-            raise ValueError(f"Unsupported SHARK.HEAD.NORMAL_CALIBRATION_MODE: {mode}")
+            raise ValueError(f"Unsupported GFM4MTSAD.HEAD.NORMAL_CALIBRATION_MODE: {mode}")
 
         p_values = p_values.clamp(min=1.0 / (count + 1.0), max=1.0)
         return -torch.log(p_values.clamp_min(self.eps))
@@ -1279,18 +1279,18 @@ class SharkHead(nn.Module):
     @staticmethod
     def _check_shapes(node_embeddings, raw_node_scores, graph_embedding):
         if node_embeddings.dim() != 3:
-            raise ValueError(f"SharkHead expects node_embeddings [B, N, H], got {tuple(node_embeddings.shape)}")
+            raise ValueError(f"GFM4MTSADHead expects node_embeddings [B, N, H], got {tuple(node_embeddings.shape)}")
         if raw_node_scores.dim() != 2:
-            raise ValueError(f"SharkHead expects raw_node_scores [B, N], got {tuple(raw_node_scores.shape)}")
+            raise ValueError(f"GFM4MTSADHead expects raw_node_scores [B, N], got {tuple(raw_node_scores.shape)}")
         if graph_embedding.dim() != 2:
-            raise ValueError(f"SharkHead expects graph_embedding [B, H], got {tuple(graph_embedding.shape)}")
+            raise ValueError(f"GFM4MTSADHead expects graph_embedding [B, H], got {tuple(graph_embedding.shape)}")
         if node_embeddings.size(0) != raw_node_scores.size(0) or node_embeddings.size(1) != raw_node_scores.size(1):
             raise ValueError(
-                "SharkHead got inconsistent node dimensions: "
+                "GFM4MTSADHead got inconsistent node dimensions: "
                 f"node_embeddings={tuple(node_embeddings.shape)}, raw_node_scores={tuple(raw_node_scores.shape)}"
             )
         if graph_embedding.size(0) != raw_node_scores.size(0):
             raise ValueError(
-                "SharkHead got inconsistent batch dimensions: "
+                "GFM4MTSADHead got inconsistent batch dimensions: "
                 f"graph_embedding={tuple(graph_embedding.shape)}, raw_node_scores={tuple(raw_node_scores.shape)}"
             )

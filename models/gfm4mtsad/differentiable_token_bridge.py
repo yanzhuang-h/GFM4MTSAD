@@ -308,7 +308,7 @@ class DifferentiableTokenBridge(nn.Module):
 
 
 def build_differentiable_token_bridge(cfg, source_dim, token_dim):
-    settings = cfg.SHARK.TOKEN_BRIDGE
+    settings = cfg.GFM4MTSAD.TOKEN_BRIDGE
     if str(settings.NAME) != "DifferentiableTokenBridge":
         raise ValueError(f"Unsupported token bridge: {settings.NAME}")
     return DifferentiableTokenBridge(

@@ -19,7 +19,7 @@ def verified_source(path):
 def load_model_class(path):
     path, text = verified_source(path)
     tree = ast.parse(text, filename=str(path))
-    # The dense SHARK path never uses upstream's optional torch_sparse import.
+    # The dense GFM4MTSAD path never uses upstream's optional torch_sparse import.
     tree.body = [node for node in tree.body if not (
         isinstance(node, ast.Import) and len(node.names) == 1
         and node.names[0].name == 'torch_sparse')]

@@ -1,4 +1,4 @@
-"""Explicit, auditable preprocessing protocols for SHARK experiments."""
+"""Explicit, auditable preprocessing protocols for GFM4MTSAD experiments."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def preprocess_splits(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
     """Transform train/validation/test while preserving their original lengths.
 
-    ``train_only`` is the historical SHARK behavior: fit the requested scaler on
+    ``train_only`` is the historical GFM4MTSAD behavior: fit the requested scaler on
     the normal training prefix and transform validation/test with that frozen
     scaler. ``pgrf_faithful`` mirrors PGRF-Net ``data_loader.py``: reconstruct
     the original training sequence as train+validation, append test, difference

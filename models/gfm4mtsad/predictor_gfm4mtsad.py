@@ -23,22 +23,22 @@ from utils.oraclead_metrics import (
 from evaluation.comprehensive_metrics import (
     pgrf_metrics,
 )
-from models.shark.augment import SharkAugmentor
+from models.gfm4mtsad.augment import GFM4MTSADAugmentor
 
 
-class SharkPredictor:
+class GFM4MTSADPredictor:
     def __init__(self, cfg, model):
         self.cfg = cfg.clone()
 
         self.model = model
 
         self.threshold = None
-        self.result_dir = os.path.join(cfg.SHARK.EVAL.RESULT_DIR, cfg.DATA.NAME)
+        self.result_dir = os.path.join(cfg.GFM4MTSAD.EVAL.RESULT_DIR, cfg.DATA.NAME)
 
         self.test_loader = get_test_dataloader(cfg)
-        self.augmentor = SharkAugmentor(cfg)
+        self.augmentor = GFM4MTSADAugmentor(cfg)
         if self.augmentor.requires_normal_mechanism:
-            fitted_mechanism = getattr(model, "_shark_normal_mechanism", None)
+            fitted_mechanism = getattr(model, "_gfm4mtsad_normal_mechanism", None)
             if fitted_mechanism is not None and fitted_mechanism.fitted:
                 self.augmentor.normal_mechanism = fitted_mechanism
                 diagnostics = fitted_mechanism.diagnostics()
@@ -47,7 +47,7 @@ class SharkPredictor:
                     self.test_loader.dataset.train
                 )
             print(
-                "[SHARK predictor mechanism] "
+                "[GFM4MTSAD predictor mechanism] "
                 f"valid_nodes={diagnostics.get('valid_node_count', 0)}/"
                 f"{diagnostics.get('n_nodes', 0)} "
                 f"valid_ratio={diagnostics.get('valid_node_ratio', 0.0):.4f}",
@@ -60,7 +60,7 @@ class SharkPredictor:
                 get_train_dataloader(cfg),
             )
             print(
-                "[SHARK predictor v2.2 selector] "
+                "[GFM4MTSAD predictor v2.2 selector] "
                 f"fitted={selector.get('fitted', False)} "
                 f"windows={selector.get('fit_windows', 0)} "
                 f"valid_nodes={selector.get('valid_node_count', 0)}",
@@ -81,10 +81,10 @@ class SharkPredictor:
         )
         reference_start = time.perf_counter()
         self.train_scores, self.train_labels = self._get_reference_outputs(
-            get_train_dataloader(self.cfg), "shark train scores"
+            get_train_dataloader(self.cfg), "gfm4mtsad train scores"
         )
         self.validation_scores, self.validation_labels = self._get_reference_outputs(
-            get_val_dataloader(self.cfg), "shark validation scores"
+            get_val_dataloader(self.cfg), "gfm4mtsad validation scores"
         )
         self.reference_score_seconds = time.perf_counter() - reference_start
 
@@ -108,7 +108,7 @@ class SharkPredictor:
         except (ArithmeticError, ImportError, IndexError, KeyError, TypeError, ValueError, RuntimeError) as error:
             # 评价扩展不应改变模型分数；缺少可选官方依赖时明确写出 NA。
             self.oraclead_metric_report = {
-                "schema_version": "SHARK-ORACLEAD-METRICS-V1",
+                "schema_version": "GFM4MTSAD-ORACLEAD-METRICS-V1",
                 "available": False,
                 "error": f"{type(error).__name__}: {error}",
             }
@@ -146,7 +146,7 @@ class SharkPredictor:
             })
         except (ArithmeticError, ImportError, IndexError, KeyError, TypeError, ValueError, RuntimeError) as error:
             self.oraclead_paper_metric_report = {
-                "schema_version": "SHARK-ORACLEAD-PAPER-200-V1",
+                "schema_version": "GFM4MTSAD-ORACLEAD-PAPER-200-V1",
                 "available": False,
                 "error": f"{type(error).__name__}: {error}",
             }
@@ -172,7 +172,7 @@ class SharkPredictor:
             })
         except (ArithmeticError, ImportError, IndexError, KeyError, TypeError, ValueError, RuntimeError) as error:
             self.pgrf_metric_report = {
-                "schema_version": "SHARK-PGRF-METRICS-V2",
+                "schema_version": "GFM4MTSAD-PGRF-METRICS-V2",
                 "available": False,
                 "error": f"{type(error).__name__}: {error}",
             }
@@ -270,22 +270,22 @@ class SharkPredictor:
         pairs = (
             ("direct_topk", "raw_topk"),
             ("direct_topk", "cal_topk"),
-            ("direct_topk", "shark_head"),
-            ("raw_topk", "shark_head"),
-            ("cal_topk", "shark_head"),
+            ("direct_topk", "gfm4mtsad_head"),
+            ("raw_topk", "gfm4mtsad_head"),
+            ("cal_topk", "gfm4mtsad_head"),
         )
         for left, right in pairs:
             if left not in sources or right not in sources:
                 continue
             diagnostics[f"EvidenceCorr_{left}_vs_{right}"] = self._safe_corr(sources[left], sources[right])
             diagnostics[f"EvidenceGap_{left}_minus_{right}"] = float(np.mean(sources[left] - sources[right]))
-        if "mil_window_score" in sources and "shark_head" in sources:
+        if "mil_window_score" in sources and "gfm4mtsad_head" in sources:
             diagnostics["MILWindowSensorCouplingError"] = float(
-                np.max(np.abs(sources["mil_window_score"] - sources["shark_head"]))
+                np.max(np.abs(sources["mil_window_score"] - sources["gfm4mtsad_head"]))
             )
         pooling_weights = getattr(self, "test_mil_pooling_weights", None)
         if pooling_weights is not None and pooling_weights.size > 0:
-            stable_weights = np.clip(pooling_weights, self.cfg.SHARK.HEAD.EPS, 1.0)
+            stable_weights = np.clip(pooling_weights, self.cfg.GFM4MTSAD.HEAD.EPS, 1.0)
             entropy = -(stable_weights * np.log(stable_weights)).sum(axis=1)
             diagnostics["MILPoolingEntropy"] = float(entropy.mean())
             diagnostics["MILEffectiveNodeCount"] = float(np.exp(entropy).mean())
@@ -317,7 +317,7 @@ class SharkPredictor:
             generator=getattr(loader, "generator", None),
         )
         score_source = self._normalize_score_source(
-            score_source or self.cfg.SHARK.EVAL.SCORE_SOURCE
+            score_source or self.cfg.GFM4MTSAD.EVAL.SCORE_SOURCE
         )
         scores_all = []
         labels_all = []
@@ -352,7 +352,7 @@ class SharkPredictor:
                     sources[key] = value.detach().flatten().cpu().numpy()
             if score_source not in sources:
                 raise ValueError(
-                    f"Unsupported SHARK reference score source: {score_source}. "
+                    f"Unsupported GFM4MTSAD reference score source: {score_source}. "
                     f"Available: {', '.join(sources.keys())}"
                 )
             scores_all.append(sources[score_source])
@@ -360,7 +360,7 @@ class SharkPredictor:
         scores = np.concatenate(scores_all, axis=0)
         labels = np.concatenate(labels_all, axis=0)
         if scores.shape[0] != labels.shape[0]:
-            raise ValueError("SHARK reference scores and labels have different lengths")
+            raise ValueError("GFM4MTSAD reference scores and labels have different lengths")
         return scores, labels
 
     @torch.no_grad()
@@ -407,7 +407,7 @@ class SharkPredictor:
 
         self.model.eval()
 
-        for inputs in tqdm(self.test_loader, desc="shark test scores"):
+        for inputs in tqdm(self.test_loader, desc="gfm4mtsad test scores"):
             windows, labels = prepare_inputs(inputs)
             outputs = self.model(windows)
             window_scores = outputs["window_score"].detach()
@@ -564,23 +564,23 @@ class SharkPredictor:
         self.test_score_sources.update(self._node_score_sources("affected", affected_node_scores))
         for key, values in getattr(self, "_score_breakdown_all", {}).items():
             self.test_score_sources[key] = torch.flatten(torch.concat(values, dim=0)).cpu().numpy()
-        source = self._normalize_score_source(self.cfg.SHARK.EVAL.SCORE_SOURCE)
+        source = self._normalize_score_source(self.cfg.GFM4MTSAD.EVAL.SCORE_SOURCE)
         if source not in self.test_score_sources:
             raise ValueError(
-                f"Unsupported SHARK.EVAL.SCORE_SOURCE: {self.cfg.SHARK.EVAL.SCORE_SOURCE}. "
+                f"Unsupported GFM4MTSAD.EVAL.SCORE_SOURCE: {self.cfg.GFM4MTSAD.EVAL.SCORE_SOURCE}. "
                 f"Available: {', '.join(self.test_score_sources.keys())}"
             )
         scores = self.test_score_sources[source]
 
         if len(scores) != len(labels):
-            raise ValueError("SHARK test scores and labels have different lengths")
+            raise ValueError("GFM4MTSAD test scores and labels have different lengths")
         if node_scores.shape[0] != len(scores):
-            raise ValueError("SHARK node scores and window scores have different lengths")
+            raise ValueError("GFM4MTSAD node scores and window scores have different lengths")
 
         return scores, labels, node_scores
 
     def _build_score_sources(self, window_scores, raw_node_scores, cal_node_scores):
-        sources = {"shark_head": window_scores, "aggregator": window_scores, "logits": window_scores}
+        sources = {"gfm4mtsad_head": window_scores, "aggregator": window_scores, "logits": window_scores}
         sources.update(self._node_score_sources("raw", raw_node_scores))
         sources.update(self._node_score_sources("cal", cal_node_scores))
 
@@ -591,7 +591,7 @@ class SharkPredictor:
         return sources
 
     def _node_score_sources(self, prefix, node_scores):
-        k = min(max(int(self.cfg.SHARK.HEAD.TOPK), 1), node_scores.shape[1])
+        k = min(max(int(self.cfg.GFM4MTSAD.HEAD.TOPK), 1), node_scores.shape[1])
         sorted_scores = np.sort(node_scores, axis=1)
         return {
             f"{prefix}_mean": node_scores.mean(axis=1),
@@ -607,7 +607,7 @@ class SharkPredictor:
             "node_max": "cal_max",
             "node_topk_mean": "cal_topk",
             "node_std": "cal_std",
-            "aggregator": "shark_head",
+            "aggregator": "gfm4mtsad_head",
             "logits": "aggregator",
         }
         normalized = aliases.get(source, source)
@@ -616,7 +616,7 @@ class SharkPredictor:
     def _get_threshold(self, test_scores, test_labels):
         if self.cfg.TEST.THRESHOLD.TYPE == "best_f1":
             return Thresholder(self.cfg, test_scores, test_labels).threshold
-        return self.cfg.SHARK.EVAL.THRESHOLD
+        return self.cfg.GFM4MTSAD.EVAL.THRESHOLD
 
     @staticmethod
     def point_adjust(pred, gt):
@@ -692,7 +692,7 @@ class SharkPredictor:
             end_inclusive=True
         )
 
-        k = min(max(int(self.cfg.SHARK.HEAD.TOPK), 1), self.test_node_scores.shape[1])
+        k = min(max(int(self.cfg.GFM4MTSAD.HEAD.TOPK), 1), self.test_node_scores.shape[1])
         pred_indices = np.where(pred == 1)[0]
 
         predicted = len(pred_indices) * k
@@ -822,7 +822,7 @@ class SharkPredictor:
         anomaly_scores = scores[labels == 1]
         if anomaly_scores.shape[0] == 0:
             return {}
-        k = min(max(int(self.cfg.SHARK.HEAD.TOPK), 1), scores.shape[1])
+        k = min(max(int(self.cfg.GFM4MTSAD.HEAD.TOPK), 1), scores.shape[1])
         order = np.argsort(-anomaly_scores, axis=1)
         target_positions = np.argmax(order == 0, axis=1)
         return {
@@ -835,11 +835,11 @@ class SharkPredictor:
 
     @torch.no_grad()
     def get_controlled_directprop_results(self):
-        root_prop_cfg = getattr(self.cfg.SHARK, "ROOT_PROP", None)
+        root_prop_cfg = getattr(self.cfg.GFM4MTSAD, "ROOT_PROP", None)
         if root_prop_cfg is None or not root_prop_cfg.CONTROLLED_EVAL_ENABLE:
             return {}
 
-        k = min(max(int(self.cfg.SHARK.HEAD.TOPK), 1), self.test_node_scores.shape[1])
+        k = min(max(int(self.cfg.GFM4MTSAD.HEAD.TOPK), 1), self.test_node_scores.shape[1])
         max_windows = int(root_prop_cfg.CONTROLLED_EVAL_MAX_WINDOWS)
         n_nodes = max(int(self.test_node_scores.shape[1]), 1)
         results = {
@@ -1117,17 +1117,17 @@ class SharkPredictor:
             acceptance_invalid = getattr(
                 self.augmentor,
                 "ACCEPTANCE_INVALID",
-                SharkAugmentor.ACCEPTANCE_INVALID,
+                GFM4MTSADAugmentor.ACCEPTANCE_INVALID,
             )
             acceptance_soft = getattr(
                 self.augmentor,
                 "ACCEPTANCE_SOFT",
-                SharkAugmentor.ACCEPTANCE_SOFT,
+                GFM4MTSADAugmentor.ACCEPTANCE_SOFT,
             )
             acceptance_hard = getattr(
                 self.augmentor,
                 "ACCEPTANCE_HARD",
-                SharkAugmentor.ACCEPTANCE_HARD,
+                GFM4MTSADAugmentor.ACCEPTANCE_HARD,
             )
             if valid_mask is None:
                 valid_mask = torch.ones(
@@ -1467,7 +1467,7 @@ class SharkPredictor:
 
     def get_score_source_sweep(self):
         sweep_sources = (
-            "shark_head",
+            "gfm4mtsad_head",
             "mil_window_score",
             "mil_lse_score",
             "mil_topk_diagnostic_score",
@@ -1600,7 +1600,7 @@ class SharkPredictor:
 
     def save_results(self, results, sweep_results=None, peft_diagnostics=None):
         results_with_threshold = {
-            "ScoreSource": self.cfg.SHARK.EVAL.SCORE_SOURCE,
+            "ScoreSource": self.cfg.GFM4MTSAD.EVAL.SCORE_SOURCE,
             "Threshold": self.threshold,
             **results,
         }
@@ -1695,9 +1695,9 @@ class SharkPredictor:
             value = results.get(name, "NA")
             metrics[name] = json_safe(value)
         payload = {
-            "schema_version": "SHARK-EXTENDED-MTSAD-METRICS-V2",
+            "schema_version": "GFM4MTSAD-EXTENDED-MTSAD-METRICS-V2",
             "entity": str(self.cfg.DATA.NAME),
-            "score_source": str(self.cfg.SHARK.EVAL.SCORE_SOURCE),
+            "score_source": str(self.cfg.GFM4MTSAD.EVAL.SCORE_SOURCE),
             "threshold": float(self.threshold),
             "metrics": metrics,
             "oraclead_protocol": json_safe(self.oraclead_metric_report),
@@ -1733,7 +1733,7 @@ class SharkPredictor:
                     else "not_applicable"
                 ),
                 "paper_comparability_warning": (
-                    "SHARK/CAROTS evaluates one score per sliding window with "
+                    "GFM4MTSAD/CAROTS evaluates one score per sliding window with "
                     "window-any labels; timestamp-level papers are not strictly "
                     "comparable unless the score/label alignment is replayed."
                 ),

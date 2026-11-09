@@ -56,7 +56,7 @@ def pretrain(args, output):
             stack.enter_context(patch(f'trainer.get_{split}_dataloader', return_value=loader))
         # The extracted frontend's inner compatibility patch resolves this name.
         stack.enter_context(patch('training.frontend.get_val_dataloader', return_value=val_loader))
-        stack.enter_context(patch('models.shark.trainer_shark.prepare_inputs',
+        stack.enter_context(patch('models.gfm4mtsad.trainer_gfm4mtsad.prepare_inputs',
                                  lambda values: data.prepare_on_device(values, device)))
         frontend.train_frontend(cfg, report, config_output=output/'config.txt',
             report_output=output/'report.json', threads=args.threads, device_override=args.device)

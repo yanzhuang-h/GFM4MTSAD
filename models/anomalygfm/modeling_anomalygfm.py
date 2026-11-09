@@ -45,7 +45,7 @@ class AnomalyGFM(nn.Module):
         self.checkpoint_report = self._initialize_model()
         self.normal_prompt_raw = nn.Parameter(torch.randn(self.embedding_dim), requires_grad=False)
         self.abnormal_prompt_raw = nn.Parameter(torch.randn(self.embedding_dim), requires_grad=False)
-        tuning_cfg = cfg.SHARK.GFM_TUNING
+        tuning_cfg = cfg.GFM4MTSAD.GFM_TUNING
         if tuning_cfg.STRATEGY == "sensor_graph_prompt_adapter":
             self.node_adapter = LowRankNodeAdapter(
                 self.embedding_dim,
@@ -77,8 +77,8 @@ class AnomalyGFM(nn.Module):
         path = Path(self.cfg.ANOMALYGFM.CHECKPOINT_PATH)
         if path.is_absolute():
             return path
-        shark_root = Path(__file__).resolve().parents[2]
-        return shark_root / path
+        gfm4mtsad_root = Path(__file__).resolve().parents[2]
+        return gfm4mtsad_root / path
 
     def _initialize_model(self):
         if self.initialization == "pretrained":
@@ -133,7 +133,7 @@ class AnomalyGFM(nn.Module):
             param.requires_grad = False
 
     def configure_tuning(self):
-        tuning_cfg = getattr(self.cfg.SHARK, "GFM_TUNING", None)
+        tuning_cfg = getattr(self.cfg.GFM4MTSAD, "GFM_TUNING", None)
         if tuning_cfg is None or not tuning_cfg.ENABLE:
             return
 
@@ -151,7 +151,7 @@ class AnomalyGFM(nn.Module):
             "sensor_graph_prompt_adapter",
         }
         if strategy not in valid_strategies:
-            raise ValueError(f"Unsupported SHARK.GFM_TUNING.STRATEGY: {strategy}")
+            raise ValueError(f"Unsupported GFM4MTSAD.GFM_TUNING.STRATEGY: {strategy}")
 
         train_prompts = bool(tuning_cfg.TRAIN_PROMPTS)
         train_prompt_projections = bool(tuning_cfg.TRAIN_PROMPT_PROJECTIONS)

@@ -46,7 +46,7 @@ class RuntimeTest(unittest.TestCase):
             for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
                 modules=([node.module or ''] if isinstance(node,ast.ImportFrom) else
                          [a.name for a in node.names] if isinstance(node,ast.Import) else [])
-                self.assertFalse(any(m.startswith(('shark_scripts','experiments.')) for m in modules),str(path))
+                self.assertFalse(any(m.startswith(('shark_scripts','gfm4mtsad_scripts','experiments.')) for m in modules),str(path))
         self.assertEqual([p.name for p in (ROOT/'experiments').iterdir()],['README.md'])
 
 

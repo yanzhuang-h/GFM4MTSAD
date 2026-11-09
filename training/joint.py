@@ -11,8 +11,8 @@ from torch.utils.data import DataLoader
 from yacs.config import CfgNode
 import models.optimizer as optimizer_utils
 from config import get_cfg_defaults
-from models.shark.modeling_information_preserving_shark import InformationPreservingUnifiedSHARK
-from models.shark.trainer_shark import SharkTrainer
+from models.gfm4mtsad.modeling_information_preserving_gfm4mtsad import InformationPreservingUnifiedGFM4MTSAD
+from models.gfm4mtsad.trainer_gfm4mtsad import GFM4MTSADTrainer
 from evaluation.predictor import InformationPreservingPredictor
 from training import data as profile
 from training.assets import ROOT, SPECS, CURRENT_OWLEYE_SHA256, sha256 as _sha256, asset_path
@@ -86,7 +86,7 @@ def configure(args):
     source = CfgNode.load_cfg(source_path.read_text(encoding="utf-8"))
     cfg = get_cfg_defaults()
     _merge_verified_source_cfg(cfg, source)
-    if cfg.DATA.NAME != args.entity or str(cfg.SHARK.GFM).lower() != args.backend:
+    if cfg.DATA.NAME != args.entity or str(cfg.GFM4MTSAD.GFM).lower() != args.backend:
         raise ValueError("source config entity/backend mismatch")
     if cfg.DATA.WIN_SIZE != 60 or not cfg.DLINEAR.INDIVIDUAL:
         raise ValueError("joint initialization control requires individual DLinear at window 60")
@@ -95,9 +95,9 @@ def configure(args):
         raise ValueError("unexpected registered training schedule")
     if cfg.DATA.PREPROCESS.PROTOCOL != "train_only" or cfg.TRAIN.RESUME:
         raise ValueError("joint training requires train-only preprocessing and no resume")
-    if cfg.SHARK.OTRCL.ENABLE:
+    if cfg.GFM4MTSAD.OTRCL.ENABLE:
         raise ValueError("the joint initialization control does not enable OTRCL")
-    if cfg.SHARK.GFM_BACKEND.TRAINING_MODE != "frozen_backend_shared_outer":
+    if cfg.GFM4MTSAD.GFM_BACKEND.TRAINING_MODE != "frozen_backend_shared_outer":
         raise ValueError("unexpected backend tuning mode")
 
     cfg.DLINEAR.FREEZE = False
@@ -111,42 +111,42 @@ def configure(args):
             raise ValueError("registered source config has no frontend SHA256")
         if _sha256(frontend_checkpoint) != expected_frontend_sha256:
             raise ValueError("registered frontend checkpoint changed; refuse warm-start run")
-        cfg.SHARK.UNIFIED.FRONTEND_CHECKPOINT = str(frontend_checkpoint)
-        cfg.SHARK.UNIFIED.FRONTEND_SHA256 = expected_frontend_sha256
+        cfg.GFM4MTSAD.UNIFIED.FRONTEND_CHECKPOINT = str(frontend_checkpoint)
+        cfg.GFM4MTSAD.UNIFIED.FRONTEND_SHA256 = expected_frontend_sha256
     else:
-        cfg.SHARK.UNIFIED.FRONTEND_CHECKPOINT = ""
+        cfg.GFM4MTSAD.UNIFIED.FRONTEND_CHECKPOINT = ""
     cfg.SEED = seed
     args._frontend_registration_path = frontend_registration_path
     args._frontend_registration = frontend_registration
-    cfg.SHARK.GFM_BACKEND.TRAINABLE_PREFIXES = list(
-        cfg.SHARK.GFM_BACKEND.TRAINABLE_PREFIXES
+    cfg.GFM4MTSAD.GFM_BACKEND.TRAINABLE_PREFIXES = list(
+        cfg.GFM4MTSAD.GFM_BACKEND.TRAINABLE_PREFIXES
     ) + ["imlp."]
     experiment_id = (
-        f"SHARK-{args.entity}-{args.frontend_init.upper()}-JOINT-SEED{seed}-{args.backend}"
+        f"GFM4MTSAD-{args.entity}-{args.frontend_init.upper()}-JOINT-SEED{seed}-{args.backend}"
     )
-    cfg.SHARK.UNIFIED.EXPERIMENT_ID = experiment_id
-    cfg.SHARK.GFM_BACKEND.EXPERIMENT_ID = experiment_id
-    cfg.SHARK.UNIFIED.RUN_MODE = args.run_mode
-    cfg.SHARK.SYNTHETIC.COUNTERFACTUAL_IMPLEMENTATION = "batched_precomputed"
+    cfg.GFM4MTSAD.UNIFIED.EXPERIMENT_ID = experiment_id
+    cfg.GFM4MTSAD.GFM_BACKEND.EXPERIMENT_ID = experiment_id
+    cfg.GFM4MTSAD.UNIFIED.RUN_MODE = args.run_mode
+    cfg.GFM4MTSAD.SYNTHETIC.COUNTERFACTUAL_IMPLEMENTATION = "batched_precomputed"
     cfg.RESULT_DIR = str(args.output_dir.resolve())
     cfg.TRAIN.CHECKPOINT_DIR = cfg.RESULT_DIR
-    cfg.SHARK.EVAL.RESULT_DIR = str((args.output_dir / "scores").resolve())
+    cfg.GFM4MTSAD.EVAL.RESULT_DIR = str((args.output_dir / "scores").resolve())
     cfg.DATA.BASE_DIR = (
         str(args.data_dir.resolve()) if args.data_dir
         else asset_path(args.assets, "data_dir")
     )
     cfg.ANOMALYGFM.CHECKPOINT_PATH = asset_path(args.assets, "anomalygfm_checkpoint", required=args.backend == "anomalygfm")
     cfg.ANOMALYGFM.SOURCE_MODEL_PATH = asset_path(args.assets, "anomalygfm_source", required=args.backend == "anomalygfm")
-    cfg.SHARK.ROOT_PROP.CONTROLLED_EVAL_ENABLE = False
+    cfg.GFM4MTSAD.ROOT_PROP.CONTROLLED_EVAL_ENABLE = False
     if args.backend == "owleye":
         if args.owleye_checkpoint is None:
             raise ValueError("OWLEYE requires an explicit pretrained checkpoint")
         checkpoint = args.owleye_checkpoint.resolve()
         if _sha256(checkpoint) != CURRENT_OWLEYE_SHA256:
             raise ValueError("OWLEYE pretrained checkpoint SHA256 is not the verified current artifact")
-        cfg.SHARK.GFM_BACKEND.CHECKPOINT_PATH = str(checkpoint)
-        cfg.SHARK.GFM_BACKEND.CHECKPOINT_SHA256 = CURRENT_OWLEYE_SHA256
-        cfg.SHARK.GFM_BACKEND.SOURCE_MODEL_PATH = asset_path(args.assets, "owleye_source")
+        cfg.GFM4MTSAD.GFM_BACKEND.CHECKPOINT_PATH = str(checkpoint)
+        cfg.GFM4MTSAD.GFM_BACKEND.CHECKPOINT_SHA256 = CURRENT_OWLEYE_SHA256
+        cfg.GFM4MTSAD.GFM_BACKEND.SOURCE_MODEL_PATH = asset_path(args.assets, "owleye_source")
     elif args.owleye_checkpoint is not None:
         raise ValueError("OWLEYE checkpoint supplied to AnomalyGFM run")
     if args.run_mode == "smoke":
@@ -188,9 +188,9 @@ def assert_joint_trainables(model, optimizer):
 
 
 
-class JointTrainer(SharkTrainer):
+class JointTrainer(GFM4MTSADTrainer):
     def train_step(self, inputs):
-        from models.shark import trainer_shark as trainer_module
+        from models.gfm4mtsad import trainer_gfm4mtsad as trainer_module
 
         windows, _ = trainer_module.prepare_inputs(inputs)
         loss_outputs = self._forward_loss(windows)
@@ -235,7 +235,7 @@ class JointTrainer(SharkTrainer):
             # The normal score reference must describe the newly fitted graph.
             self.model.fit_evidence_calibrator(
                 self.train_loader,
-                max_batches=self.cfg.SHARK.HEAD.NORMAL_CALIBRATION_MAX_BATCHES,
+                max_batches=self.cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_MAX_BATCHES,
             )
             print(
                 "[joint reference] epoch="
@@ -267,15 +267,15 @@ def run(args):
         for split, loader in (("train", train_loader), ("val", val_loader), ("test", val_loader)):
             stack.enter_context(patch(f"trainer.get_{split}_dataloader", return_value=loader))
         stack.enter_context(patch(
-            "models.shark.trainer_shark.prepare_inputs",
+            "models.gfm4mtsad.trainer_gfm4mtsad.prepare_inputs",
             lambda value: profile.prepare_on_device(value, device),
         ))
-        model = InformationPreservingUnifiedSHARK(cfg).to(device)
+        model = InformationPreservingUnifiedGFM4MTSAD(cfg).to(device)
         frontend_random_sha256 = parameter_digest(model.imlp)
         frontend_load_report = None
         if args.frontend_init == "pretrained":
             frontend_load_report = model.load_shared_frontend_checkpoint(
-                cfg.SHARK.UNIFIED.FRONTEND_CHECKPOINT
+                cfg.GFM4MTSAD.UNIFIED.FRONTEND_CHECKPOINT
             )
         frontend_before = parameter_digest(model.imlp)
         frontend_checkpoint_changed_initialization = (
@@ -291,7 +291,7 @@ def run(args):
         trainer = JointTrainer(cfg, model)
         assert_joint_trainables(model, trainer.optimizer)
         report = {
-            "schema_version": "SHARK-MTS-JOINT-INIT-ABLATION-V1",
+            "schema_version": "GFM4MTSAD-MTS-JOINT-INIT-ABLATION-V1",
             "backend": args.backend,
             "entity": args.entity,
             "status": "TRAINING",
@@ -302,7 +302,7 @@ def run(args):
             "seed": cfg.SEED,
             "source_config": str(source_path),
             "source_config_sha256": _sha256(source_path),
-            "source_shark_checkpoint_loaded": False,
+            "source_gfm4mtsad_checkpoint_loaded": False,
             "frontend_init": args.frontend_init,
             "source_frontend_checkpoint_loaded": frontend_load_report is not None,
             "source_frontend_checkpoint": (
@@ -330,7 +330,7 @@ def run(args):
                 else int(args._frontend_registration["seed"])
             ),
             "pretrained_gfm_checkpoint": (
-                cfg.SHARK.GFM_BACKEND.CHECKPOINT_PATH if args.backend == "owleye"
+                cfg.GFM4MTSAD.GFM_BACKEND.CHECKPOINT_PATH if args.backend == "owleye"
                 else cfg.ANOMALYGFM.CHECKPOINT_PATH
             ),
             "pretrained_gfm_sha256": (
@@ -339,9 +339,9 @@ def run(args):
             ),
             "owleye_historical_gfm_weight_reproduced": (
                 None if args.backend != "owleye" else
-                str(source.SHARK.GFM_BACKEND.CHECKPOINT_SHA256) == CURRENT_OWLEYE_SHA256
+                str(source.GFM4MTSAD.GFM_BACKEND.CHECKPOINT_SHA256) == CURRENT_OWLEYE_SHA256
             ),
-            "ipra_implementation_sha256": _sha256(ROOT / "models/shark/information_preserving_residual.py"),
+            "ipra_implementation_sha256": _sha256(ROOT / "models/gfm4mtsad/information_preserving_residual.py"),
             "frontend_random_sha256_before_load": frontend_random_sha256,
             "frontend_sha256_before": frontend_before,
             "frontend_checkpoint_changed_initialization": (
@@ -350,12 +350,12 @@ def run(args):
             "trainable_names": sorted(n for n, p in model.named_parameters() if p.requires_grad),
             "graph_reference_refit_each_epoch": bool(cfg.GRAPHBUILDER.REFERENCE_PRIOR_ENABLE),
             "checkpoint_selection": "train-normal synthetic validation loss",
-            "counterfactual_implementation": cfg.SHARK.SYNTHETIC.COUNTERFACTUAL_IMPLEMENTATION,
+            "counterfactual_implementation": cfg.GFM4MTSAD.SYNTHETIC.COUNTERFACTUAL_IMPLEMENTATION,
             "test_labels_used_for_training_or_selection": False,
         }
         (args.output_dir / "audit.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         if args.gradient_audit_only:
-            from models.shark import trainer_shark as trainer_module
+            from models.gfm4mtsad import trainer_gfm4mtsad as trainer_module
 
             trainer.cur_epoch = 0
             trainer.cur_iter = 1
@@ -402,15 +402,15 @@ def run(args):
         frontend_after = parameter_digest(model.imlp)
         if frontend_after == frontend_before:
             raise RuntimeError("best joint checkpoint did not update DLinear")
-        if cfg.SHARK.HEAD.NORMAL_CALIBRATION_REFIT_AT_TEST:
+        if cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_REFIT_AT_TEST:
             model.fit_evidence_calibrator(
-                train_loader, max_batches=cfg.SHARK.HEAD.NORMAL_CALIBRATION_MAX_BATCHES,
+                train_loader, max_batches=cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_MAX_BATCHES,
             )
         reference = save_evaluation_reference(model, args.output_dir / "evaluation_reference.pt")
-        model._shark_normal_mechanism = trainer.augmentor.normal_mechanism
+        model._gfm4mtsad_normal_mechanism = trainer.augmentor.normal_mechanism
         torch.save(trainer.augmentor.normal_mechanism, args.output_dir / "normal_mechanism.pt")
         InformationPreservingPredictor(cfg, model).predict()
-        metric_path = Path(cfg.SHARK.EVAL.RESULT_DIR) / args.entity / "test_metric_protocol.json"
+        metric_path = Path(cfg.GFM4MTSAD.EVAL.RESULT_DIR) / args.entity / "test_metric_protocol.json"
         native_metrics = json.loads(metric_path.read_text(encoding="utf-8"))["metrics"]
         if args.backend == "owleye":
             tail_dir = args.output_dir / "tail_protocol"

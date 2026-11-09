@@ -3,14 +3,14 @@ import torch.nn.functional as F
 
 from models.anomalygfm.modeling_anomalygfm import normalize_adjacency
 
-from models.shark.gfm_backend import (
+from models.gfm4mtsad.gfm_backend import (
     GFMBackendContract,
     GFMBackendInput,
     GFMBackendSpec,
     NODE_ANOMALY_EVIDENCE_SEMANTICS,
     validate_backend_output,
 )
-from models.shark.high_dim_gfm_entry import HighDimResidualAnomalyGFM
+from models.gfm4mtsad.high_dim_gfm_entry import HighDimResidualAnomalyGFM
 
 
 class AnomalyGFMHighDimBackend(
@@ -22,12 +22,12 @@ class AnomalyGFMHighDimBackend(
     def backend_spec(self):
         native_peft = bool(
             getattr(
-                getattr(self.cfg.SHARK, "GFM_BACKEND", None),
+                getattr(self.cfg.GFM4MTSAD, "GFM_BACKEND", None),
                 "TRAIN_NATIVE_PEFT",
                 False,
             )
         )
-        high_dim = bool(self.cfg.SHARK.HIGH_DIM_GFM_ENTRY.ENABLE)
+        high_dim = bool(self.cfg.GFM4MTSAD.HIGH_DIM_GFM_ENTRY.ENABLE)
         if native_peft and high_dim:
             strategy = "native_prompt_plus_high_dim_residual"
         elif native_peft:
@@ -50,7 +50,7 @@ class AnomalyGFMHighDimBackend(
         )
 
     def forward_backend(self, inputs: GFMBackendInput):
-        high_dim = bool(self.cfg.SHARK.HIGH_DIM_GFM_ENTRY.ENABLE)
+        high_dim = bool(self.cfg.GFM4MTSAD.HIGH_DIM_GFM_ENTRY.ENABLE)
         if high_dim:
             if inputs.source_node_features is None:
                 raise ValueError("AnomalyGFM backend requires source node features")
@@ -99,7 +99,7 @@ class AnomalyGFMHighDimBackend(
         GCN1 may use a different graph from GCN2, while GCN2 and the native
         post-GCN neighbor residual share one downstream topology.
         """
-        if bool(self.cfg.SHARK.HIGH_DIM_GFM_ENTRY.ENABLE):
+        if bool(self.cfg.GFM4MTSAD.HIGH_DIM_GFM_ENTRY.ENABLE):
             raise ValueError(
                 "Topology reliability routing requires the registered "
                 "zero-input-IPRA AnomalyGFM path"
@@ -173,11 +173,11 @@ class AnomalyGFMHighDimBackend(
 
     def adaptation_parameter_names(self):
         names = []
-        if bool(self.cfg.SHARK.HIGH_DIM_GFM_ENTRY.ENABLE):
+        if bool(self.cfg.GFM4MTSAD.HIGH_DIM_GFM_ENTRY.ENABLE):
             names.append("high_dim_entry.weight")
         if bool(
             getattr(
-                getattr(self.cfg.SHARK, "GFM_BACKEND", None),
+                getattr(self.cfg.GFM4MTSAD, "GFM_BACKEND", None),
                 "TRAIN_NATIVE_PEFT",
                 False,
             )

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.shark.losses import _weighted_sample_mean
+from models.gfm4mtsad.losses import _weighted_sample_mean
 
 
 class RelationalResidualProjector(nn.Module):
@@ -17,7 +17,7 @@ class RelationalResidualProjector(nn.Module):
 
     @classmethod
     def from_config(cls, cfg):
-        settings = cfg.SHARK.OTRCL
+        settings = cfg.GFM4MTSAD.OTRCL
         return cls(
             exclude_self=bool(settings.RELATIONAL_EXCLUDE_SELF),
             eps=float(settings.RELATIONAL_EPS),

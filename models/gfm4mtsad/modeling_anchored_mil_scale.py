@@ -2,10 +2,10 @@ from pathlib import Path
 
 import torch
 
-from models.shark.modeling_high_dim_gfm_entry import HighDimGFMEntrySHARK
+from models.gfm4mtsad.modeling_high_dim_gfm_entry import HighDimGFMEntryGFM4MTSAD
 
 
-class AnchoredMILScaleSHARK(HighDimGFMEntrySHARK):
+class AnchoredMILScaleGFM4MTSAD(HighDimGFMEntryGFM4MTSAD):
     """High-dimensional entry with a fixed pre-adaptation MIL scale."""
 
     def __init__(self, cfg):

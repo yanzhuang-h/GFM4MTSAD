@@ -1,7 +1,7 @@
 """The two registered GFM backends; wrappers retain their research semantics."""
-from models.shark.anomalygfm_backend import AnomalyGFMHighDimBackend
-from models.shark.gfm_backend import GFMBackendContract
-from models.shark.owleye_backend import OWLEYEBackend
+from models.gfm4mtsad.anomalygfm_backend import AnomalyGFMHighDimBackend
+from models.gfm4mtsad.gfm_backend import GFMBackendContract
+from models.gfm4mtsad.owleye_backend import OWLEYEBackend
 
 
 def build_gfm_backend(cfg, source_feature_dim):
@@ -9,7 +9,7 @@ def build_gfm_backend(cfg, source_feature_dim):
         'AnomalyGFM': lambda: AnomalyGFMHighDimBackend(cfg, high_dim_input=int(source_feature_dim)),
         'OWLEYE': lambda: OWLEYEBackend.from_config(cfg),
     }
-    name = str(cfg.SHARK.GFM)
+    name = str(cfg.GFM4MTSAD.GFM)
     if name not in builders:
         raise ValueError(f'Unsupported backend: {name}; choose AnomalyGFM or OWLEYE')
     backend = builders[name]()

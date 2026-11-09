@@ -20,7 +20,7 @@ ITRANSFORMER:
   c_out: 38
   enc_in: 38
 RESULT_DIR: outputs
-SHARK:
+GFM4MTSAD:
   EVAL:
     RESULT_DIR: outputs/scores
   GFM: OWLEYE

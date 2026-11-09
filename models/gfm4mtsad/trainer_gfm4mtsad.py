@@ -7,8 +7,8 @@ from tqdm import tqdm
 
 from trainer import Trainer, prepare_inputs
 import models.optimizer as optim
-from models.shark.augment import SharkAugmentor
-from models.shark.losses import (
+from models.gfm4mtsad.augment import GFM4MTSADAugmentor
+from models.gfm4mtsad.losses import (
     batch_hard_normal_contrastive_loss,
     carots_style_contrastive_loss,
     decoupled_local_global_contrastive_loss,
@@ -25,25 +25,25 @@ from models.shark.losses import (
     temporal_regime_contrastive_loss,
     window_bce_loss,
 )
-from models.shark.gfm_backend import require_node_anomaly_evidence
-from models.shark.relation_residual import RELATION_PATH_PARAMETER_PREFIXES
-from models.shark.relational_contrast import relational_node_contrastive_loss
-from models.shark.otrcl_integrity import (
+from models.gfm4mtsad.gfm_backend import require_node_anomaly_evidence
+from models.gfm4mtsad.relation_residual import RELATION_PATH_PARAMETER_PREFIXES
+from models.gfm4mtsad.relational_contrast import relational_node_contrastive_loss
+from models.gfm4mtsad.otrcl_integrity import (
     gradient_clip_diagnostics,
     summarize_otrcl_view_integrity,
 )
-from models.shark.temporal_counterfactual import (
+from models.gfm4mtsad.temporal_counterfactual import (
     TemporalCounterfactualGenerator,
 )
 from utils.misc import mkdir
 
 
-class SharkTrainer(Trainer):
+class GFM4MTSADTrainer(Trainer):
     def __init__(self, cfg, model, negative_teacher=None):
         super().__init__(cfg, model)
-        self.augmentor = SharkAugmentor(cfg)
+        self.augmentor = GFM4MTSADAugmentor(cfg)
         self.negative_teacher = negative_teacher
-        self.otrcl_settings = getattr(cfg.SHARK, "OTRCL", None)
+        self.otrcl_settings = getattr(cfg.GFM4MTSAD, "OTRCL", None)
         self.otrcl_enabled = bool(
             getattr(self.otrcl_settings, "ENABLE", False)
         )
@@ -59,15 +59,15 @@ class SharkTrainer(Trainer):
             "temporal_regime_encoder",
         ):
             raise ValueError(
-                "SHARK.OTRCL.ENABLE requires OTRCLUnifiedSHARK"
+                "GFM4MTSAD.OTRCL.ENABLE requires OTRCLUnifiedGFM4MTSAD"
             )
         if self.augmentor.requires_normal_mechanism:
             print(
-                f"[SHARK setup] dataset={cfg.DATA.NAME} fitting normal mechanism",
+                f"[GFM4MTSAD setup] dataset={cfg.DATA.NAME} fitting normal mechanism",
                 flush=True,
             )
             self.augmentor.fit_normal_mechanism(self.train_loader)
-            self.model._shark_normal_mechanism = self.augmentor.normal_mechanism
+            self.model._gfm4mtsad_normal_mechanism = self.augmentor.normal_mechanism
             self._print_normal_mechanism_diagnostics()
         if self.augmentor.requires_frozen_gfm_teacher:
             if self.negative_teacher is None:
@@ -78,16 +78,16 @@ class SharkTrainer(Trainer):
                 self.negative_teacher
             )
             print(
-                "[SHARK frozen teacher selector] "
+                "[GFM4MTSAD frozen teacher selector] "
                 f"bound={teacher_diagnostics.get('bound', False)} "
                 f"valid_nodes={teacher_diagnostics.get('valid_node_count', 0)} "
                 "teacher_trainable=False",
                 flush=True,
             )
-        print(f"[SHARK setup] dataset={cfg.DATA.NAME} fitting Sensor-to-GFM Adapter", flush=True)
+        print(f"[GFM4MTSAD setup] dataset={cfg.DATA.NAME} fitting Sensor-to-GFM Adapter", flush=True)
         self.model.fit_feature_adapter(
             self.train_loader,
-            max_batches=cfg.SHARK.ADAPTER.FIT_MAX_BATCHES,
+            max_batches=cfg.GFM4MTSAD.ADAPTER.FIT_MAX_BATCHES,
         )
         if bool(
             getattr(
@@ -97,7 +97,7 @@ class SharkTrainer(Trainer):
             )
         ):
             print(
-                f"[SHARK setup] dataset={cfg.DATA.NAME} "
+                f"[GFM4MTSAD setup] dataset={cfg.DATA.NAME} "
                 "fitting normal DLinear graph reference",
                 flush=True,
             )
@@ -110,7 +110,7 @@ class SharkTrainer(Trainer):
                 ),
             )
             print(
-                "[SHARK graph reference] "
+                "[GFM4MTSAD graph reference] "
                 f"fitted={graph_reference.get('reference_prior_fitted', False)} "
                 f"windows={graph_reference.get('reference_prior_fit_windows', 0)} "
                 f"blend={graph_reference.get('reference_prior_blend', 0.0):.3f}",
@@ -118,7 +118,7 @@ class SharkTrainer(Trainer):
             )
         if self.augmentor.requires_frontend_graph_selector:
             print(
-                f"[SHARK setup] dataset={cfg.DATA.NAME} fitting train-normal "
+                f"[GFM4MTSAD setup] dataset={cfg.DATA.NAME} fitting train-normal "
                 "frontend-effective selector scale",
                 flush=True,
             )
@@ -128,20 +128,20 @@ class SharkTrainer(Trainer):
                 self.train_loader,
             )
             print(
-                "[SHARK v2.2 selector] "
+                "[GFM4MTSAD v2.2 selector] "
                 f"fitted={selector.get('fitted', False)} "
                 f"windows={selector.get('fit_windows', 0)} "
                 f"valid_nodes={selector.get('valid_node_count', 0)} "
                 f"scale_floor={selector.get('scale_floor', 0.0):.6g}",
                 flush=True,
             )
-        print(f"[SHARK setup] dataset={cfg.DATA.NAME} fitting normal reference", flush=True)
+        print(f"[GFM4MTSAD setup] dataset={cfg.DATA.NAME} fitting normal reference", flush=True)
         self.model.fit_evidence_calibrator(
             self.train_loader,
-            max_batches=cfg.SHARK.HEAD.NORMAL_CALIBRATION_MAX_BATCHES,
+            max_batches=cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_MAX_BATCHES,
         )
         self._print_mil_reference_diagnostics()
-        print(f"[SHARK setup] dataset={cfg.DATA.NAME} ready", flush=True)
+        print(f"[GFM4MTSAD setup] dataset={cfg.DATA.NAME} ready", flush=True)
         self._print_peft_diagnostics()
 
     @torch.no_grad()
@@ -271,7 +271,7 @@ class SharkTrainer(Trainer):
             self.cur_epoch = cur_epoch
             epoch_start = time.time()
             print(
-                f"[SHARK epoch] dataset={self.cfg.DATA.NAME} "
+                f"[GFM4MTSAD epoch] dataset={self.cfg.DATA.NAME} "
                 f"epoch={cur_epoch + 1}/{self.cfg.SOLVER.MAX_EPOCH} start",
                 flush=True,
             )
@@ -279,7 +279,7 @@ class SharkTrainer(Trainer):
 
             if self._is_eval_epoch(cur_epoch):
                 print(
-                    f"[SHARK validation] dataset={self.cfg.DATA.NAME} "
+                    f"[GFM4MTSAD validation] dataset={self.cfg.DATA.NAME} "
                     f"epoch={cur_epoch + 1}/{self.cfg.SOLVER.MAX_EPOCH} start",
                     flush=True,
                 )
@@ -300,14 +300,14 @@ class SharkTrainer(Trainer):
                 elif self.cfg.TRAIN.SAVE_EVERY_EVAL:
                     self.save_best_model()
                 print(
-                    f"[SHARK validation] dataset={self.cfg.DATA.NAME} "
+                    f"[GFM4MTSAD validation] dataset={self.cfg.DATA.NAME} "
                     f"epoch={cur_epoch + 1}/{self.cfg.SOLVER.MAX_EPOCH} "
                     f"{tracking_meter.name}={tracking_meter.avg:.6f} complete",
                     flush=True,
                 )
 
             print(
-                f"[SHARK epoch] dataset={self.cfg.DATA.NAME} "
+                f"[GFM4MTSAD epoch] dataset={self.cfg.DATA.NAME} "
                 f"epoch={cur_epoch + 1}/{self.cfg.SOLVER.MAX_EPOCH} "
                 f"elapsed={self._format_duration(time.time() - epoch_start)} complete",
                 flush=True,
@@ -322,7 +322,7 @@ class SharkTrainer(Trainer):
         if len(names) > 12:
             preview += f", ... (+{len(names) - 12})"
         print(
-            "[SHARK PEFT] "
+            "[GFM4MTSAD PEFT] "
             f"strategy={diagnostics.get('strategy')} "
             f"trainable={diagnostics.get('trainable_params')}/"
             f"{diagnostics.get('total_params')} "
@@ -344,7 +344,7 @@ class SharkTrainer(Trainer):
                 f"lr_scale={group.get('lr_scale', 1.0):.3g},"
                 f"wd={group.get('weight_decay', self.cfg.SOLVER.WEIGHT_DECAY):.3g}"
             )
-        print("[SHARK optimizer] " + " | ".join(parts))
+        print("[GFM4MTSAD optimizer] " + " | ".join(parts))
 
     def _print_mil_reference_diagnostics(self):
         if not hasattr(self.model, "mil_reference_diagnostics"):
@@ -353,7 +353,7 @@ class SharkTrainer(Trainer):
         if not diagnostics:
             return
         print(
-            "[SHARK MIL reference] "
+            "[GFM4MTSAD MIL reference] "
             f"fitted={diagnostics.get('mil_reference_fitted', False)} "
             f"scale_min={diagnostics.get('mil_reference_scale_min', float('nan')):.6f} "
             f"scale_mean={diagnostics.get('mil_reference_scale_mean', float('nan')):.6f} "
@@ -366,7 +366,7 @@ class SharkTrainer(Trainer):
         if not diagnostics:
             return
         print(
-            "[SHARK normal mechanism] "
+            "[GFM4MTSAD normal mechanism] "
             f"fitted={diagnostics.get('fitted', False)} "
             f"samples={diagnostics.get('n_samples', 0)} "
             f"fit_samples={diagnostics.get('fit_samples', 0)} "
@@ -385,20 +385,20 @@ class SharkTrainer(Trainer):
         )
 
     def train_epoch(self):
-        if not getattr(self.cfg.SHARK, "PROGRESS_ENABLE", True):
+        if not getattr(self.cfg.GFM4MTSAD, "PROGRESS_ENABLE", True):
             super().train_epoch()
         else:
             self._train_epoch_with_progress()
 
-        if self.cfg.SHARK.HEAD.NORMAL_CALIBRATION_REFIT_EACH_EPOCH:
+        if self.cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_REFIT_EACH_EPOCH:
             print(
-                f"[SHARK calibration] dataset={self.cfg.DATA.NAME} "
+                f"[GFM4MTSAD calibration] dataset={self.cfg.DATA.NAME} "
                 f"epoch={self.cur_epoch + 1}/{self.cfg.SOLVER.MAX_EPOCH}",
                 flush=True,
             )
             self.model.fit_evidence_calibrator(
                 self.train_loader,
-                max_batches=self.cfg.SHARK.HEAD.NORMAL_CALIBRATION_MAX_BATCHES,
+                max_batches=self.cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_MAX_BATCHES,
             )
             self._print_mil_reference_diagnostics()
 
@@ -407,7 +407,7 @@ class SharkTrainer(Trainer):
         loss_meters = self._get_loss_meters()
         self.model.train()
         data_size = len(self.train_loader)
-        update_interval = max(int(getattr(self.cfg.SHARK, "PROGRESS_UPDATE_INTERVAL", 10)), 1)
+        update_interval = max(int(getattr(self.cfg.GFM4MTSAD, "PROGRESS_UPDATE_INTERVAL", 10)), 1)
         interactive = bool(getattr(sys.stderr, "isatty", lambda: False)())
         progress = tqdm(
             self.train_loader,
@@ -835,7 +835,7 @@ class SharkTrainer(Trainer):
                 for key, value in totals["positive_selection_sums"].items()
             }
             print(
-                "[SHARK positive selection] "
+                "[GFM4MTSAD positive selection] "
                 f"batches={positive_batches} "
                 f"candidate_graph_drift={positive_means.get('candidate_graph_drift_mean', float('nan')):.4f} "
                 f"selected_graph_drift={positive_means.get('selected_graph_drift_mean', float('nan')):.4f} "
@@ -872,7 +872,7 @@ class SharkTrainer(Trainer):
                 (selector_selected[selector_valid] > 0).float().mean()
             )
             print(
-                "[SHARK frontend-effective selector epoch] "
+                "[GFM4MTSAD frontend-effective selector epoch] "
                 f"dataset={self.cfg.DATA.NAME} epoch={self.cur_epoch + 1} "
                 f"candidates={totals['frontend_effective_candidate_count']} "
                 f"eligible={totals['frontend_effective_eligible_count']} "
@@ -1035,7 +1035,7 @@ class SharkTrainer(Trainer):
         fallback_attempt_count = max(totals["fallback_attempt_count"], 1)
         direct_attempt_count = max(totals["direct_attempt_count"], 1)
         print(
-            "[SHARK synthetic epoch] "
+            "[GFM4MTSAD synthetic epoch] "
             f"dataset={self.cfg.DATA.NAME} epoch={self.cur_epoch + 1} "
             f"attempted={attempted} valid={totals['valid_count']} "
             f"valid_ratio={totals['valid_count'] / attempted:.3f} "
@@ -1140,7 +1140,7 @@ class SharkTrainer(Trainer):
         eta = elapsed / max(current, 1) * max(total - current, 0)
         metrics = " ".join(f"{key}={value}" for key, value in values.items())
         print(
-            f"[SHARK progress] {self.cfg.DATA.NAME} "
+            f"[GFM4MTSAD progress] {self.cfg.DATA.NAME} "
             f"epoch={self.cur_epoch + 1}/{self.cfg.SOLVER.MAX_EPOCH} "
             f"batch={current}/{total} [{bar}] {100.0 * fraction:5.1f}% "
             f"{metrics} elapsed={self._format_duration(elapsed)} "
@@ -1199,7 +1199,7 @@ class SharkTrainer(Trainer):
         }
         relation_residual_enabled = bool(
             getattr(
-                getattr(self.cfg.SHARK, "RELATION_RESIDUAL_CONTRAST", None),
+                getattr(self.cfg.GFM4MTSAD, "RELATION_RESIDUAL_CONTRAST", None),
                 "ENABLE",
                 False,
             )
@@ -1212,7 +1212,7 @@ class SharkTrainer(Trainer):
             ]
         local_global_enabled = bool(
             getattr(
-                getattr(self.cfg.SHARK, "LOCAL_GLOBAL_CONTRAST", None),
+                getattr(self.cfg.GFM4MTSAD, "LOCAL_GLOBAL_CONTRAST", None),
                 "ENABLE",
                 False,
             )
@@ -1226,7 +1226,7 @@ class SharkTrainer(Trainer):
         decoupled_enabled = bool(
             getattr(
                 getattr(
-                    self.cfg.SHARK,
+                    self.cfg.GFM4MTSAD,
                     "DECOUPLED_LOCAL_GLOBAL_CONTRAST",
                     None,
                 ),
@@ -1243,7 +1243,7 @@ class SharkTrainer(Trainer):
         native_evidence_contrast_enabled = bool(
             getattr(
                 getattr(
-                    self.cfg.SHARK,
+                    self.cfg.GFM4MTSAD,
                     "NATIVE_EVIDENCE_MECHANISM_CONTRAST",
                     None,
                 ),
@@ -1265,7 +1265,7 @@ class SharkTrainer(Trainer):
         tail_window_contrast_enabled = bool(
             getattr(
                 getattr(
-                    self.cfg.SHARK,
+                    self.cfg.GFM4MTSAD,
                     "TAIL_PRESERVING_WINDOW_CONTRAST",
                     None,
                 ),
@@ -1484,7 +1484,7 @@ class SharkTrainer(Trainer):
                     f"{cosines['NormalTail-WindowBCE']:.6f}"
                 )
             print(
-                "[SHARK gradient audit] "
+                "[GFM4MTSAD gradient audit] "
                 f"dataset={self.cfg.DATA.NAME} epoch={epoch} group={group_name} "
                 f"contrastive={norms['Contrastive']:.6e} "
                 f"node={norms['Node']:.6e} "
@@ -1555,9 +1555,9 @@ class SharkTrainer(Trainer):
         self._local_global_contrast_stats = stats
 
         if training and int(getattr(self, "cur_iter", -1)) in (0, 1):
-            settings = self.cfg.SHARK.LOCAL_GLOBAL_CONTRAST
+            settings = self.cfg.GFM4MTSAD.LOCAL_GLOBAL_CONTRAST
             print(
-                "[SHARK local-global contrast] "
+                "[GFM4MTSAD local-global contrast] "
                 f"dataset={self.cfg.DATA.NAME} "
                 f"arm={settings.EXPERIMENT_ARM} "
                 f"valid_samples={sample_count} direct_nodes={direct_count} "
@@ -1596,7 +1596,7 @@ class SharkTrainer(Trainer):
             )
         )
         count = max(int(stats["training_sample_count"]), 1)
-        settings = getattr(self.cfg.SHARK, "LOCAL_GLOBAL_CONTRAST", None)
+        settings = getattr(self.cfg.GFM4MTSAD, "LOCAL_GLOBAL_CONTRAST", None)
         return {
             "enabled": bool(getattr(settings, "ENABLE", False)),
             "experiment_arm": str(
@@ -1702,9 +1702,9 @@ class SharkTrainer(Trainer):
         self._decoupled_local_global_contrast_stats = stats
 
         if training and int(getattr(self, "cur_iter", -1)) in (0, 1):
-            settings = self.cfg.SHARK.DECOUPLED_LOCAL_GLOBAL_CONTRAST
+            settings = self.cfg.GFM4MTSAD.DECOUPLED_LOCAL_GLOBAL_CONTRAST
             print(
-                "[SHARK 解耦局部-全局对比] "
+                "[GFM4MTSAD 解耦局部-全局对比] "
                 f"dataset={self.cfg.DATA.NAME} "
                 f"arm={settings.EXPERIMENT_ARM} "
                 f"valid_samples={sample_count} "
@@ -1752,7 +1752,7 @@ class SharkTrainer(Trainer):
         global_count = max(float(stats["training_global_weight_sum"]), 1.0)
         local_count = max(float(stats["training_local_weight_sum"]), 1.0)
         settings = getattr(
-            self.cfg.SHARK,
+            self.cfg.GFM4MTSAD,
             "DECOUPLED_LOCAL_GLOBAL_CONTRAST",
             None,
         )
@@ -1879,9 +1879,9 @@ class SharkTrainer(Trainer):
         self._native_evidence_mechanism_contrast_stats = stats
 
         if training and int(getattr(self, "cur_iter", -1)) in (0, 1):
-            settings = self.cfg.SHARK.NATIVE_EVIDENCE_MECHANISM_CONTRAST
+            settings = self.cfg.GFM4MTSAD.NATIVE_EVIDENCE_MECHANISM_CONTRAST
             print(
-                "[SHARK 原生证据机制对比] "
+                "[GFM4MTSAD 原生证据机制对比] "
                 f"dataset={self.cfg.DATA.NAME} arm={settings.EXPERIMENT_ARM} "
                 f"valid_samples={sample_count} local_samples={local_sample_count} "
                 f"direct_nodes={direct_node_count} "
@@ -1905,7 +1905,7 @@ class SharkTrainer(Trainer):
         global_count = max(float(stats["training_global_weight_sum"]), 1.0)
         local_count = max(float(stats["training_local_weight_sum"]), 1.0)
         settings = getattr(
-            self.cfg.SHARK,
+            self.cfg.GFM4MTSAD,
             "NATIVE_EVIDENCE_MECHANISM_CONTRAST",
             None,
         )
@@ -2043,9 +2043,9 @@ class SharkTrainer(Trainer):
         self._tail_preserving_window_contrast_stats = stats
 
         if training and int(getattr(self, "cur_iter", -1)) in (0, 1):
-            settings = self.cfg.SHARK.TAIL_PRESERVING_WINDOW_CONTRAST
+            settings = self.cfg.GFM4MTSAD.TAIL_PRESERVING_WINDOW_CONTRAST
             print(
-                "[SHARK 尾部保持窗口机制对比] "
+                "[GFM4MTSAD 尾部保持窗口机制对比] "
                 f"dataset={self.cfg.DATA.NAME} arm={settings.EXPERIMENT_ARM} "
                 f"valid_samples={sample_count} hard_tail={hard_tail_count} "
                 "normal_variation="
@@ -2068,7 +2068,7 @@ class SharkTrainer(Trainer):
         )
         count = max(float(stats["training_weight_sum"]), 1.0)
         settings = getattr(
-            self.cfg.SHARK,
+            self.cfg.GFM4MTSAD,
             "TAIL_PRESERVING_WINDOW_CONTRAST",
             None,
         )
@@ -2332,7 +2332,7 @@ class SharkTrainer(Trainer):
                 base_node_features = self.model.imlp(windows.float())
                 base_adjacency = self.model.graph_builder(base_node_features)
 
-        token_bridge = getattr(self.cfg.SHARK, "TOKEN_BRIDGE", None)
+        token_bridge = getattr(self.cfg.GFM4MTSAD, "TOKEN_BRIDGE", None)
         joint_bridge_training = bool(
             getattr(token_bridge, "JOINT_TRAINING", False)
         )
@@ -2360,19 +2360,19 @@ class SharkTrainer(Trainer):
         node_evidence = self._build_counterfactual_node_evidence(outputs_anchor, base_adjacency)
         progress = self._training_progress()
         collect_diagnostics = (
-            getattr(self.cfg.SHARK.SYNTHETIC, "PRINT_DIAGNOSTICS", False)
+            getattr(self.cfg.GFM4MTSAD.SYNTHETIC, "PRINT_DIAGNOSTICS", False)
             and self.model.training
             and self.cur_iter in (0, 1)
         )
         relation_residual_enabled = bool(
             getattr(
-                getattr(self.cfg.SHARK, "RELATION_RESIDUAL_CONTRAST", None),
+                getattr(self.cfg.GFM4MTSAD, "RELATION_RESIDUAL_CONTRAST", None),
                 "ENABLE",
                 False,
             )
         )
         local_global_settings = getattr(
-            self.cfg.SHARK,
+            self.cfg.GFM4MTSAD,
             "LOCAL_GLOBAL_CONTRAST",
             None,
         )
@@ -2380,7 +2380,7 @@ class SharkTrainer(Trainer):
             getattr(local_global_settings, "ENABLE", False)
         )
         decoupled_local_global_settings = getattr(
-            self.cfg.SHARK,
+            self.cfg.GFM4MTSAD,
             "DECOUPLED_LOCAL_GLOBAL_CONTRAST",
             None,
         )
@@ -2388,7 +2388,7 @@ class SharkTrainer(Trainer):
             getattr(decoupled_local_global_settings, "ENABLE", False)
         )
         native_evidence_contrast_settings = getattr(
-            self.cfg.SHARK,
+            self.cfg.GFM4MTSAD,
             "NATIVE_EVIDENCE_MECHANISM_CONTRAST",
             None,
         )
@@ -2396,7 +2396,7 @@ class SharkTrainer(Trainer):
             getattr(native_evidence_contrast_settings, "ENABLE", False)
         )
         tail_window_contrast_settings = getattr(
-            self.cfg.SHARK,
+            self.cfg.GFM4MTSAD,
             "TAIL_PRESERVING_WINDOW_CONTRAST",
             None,
         )
@@ -2611,13 +2611,13 @@ class SharkTrainer(Trainer):
                 "positive_invalid_enters_node_consistency": bool(
                     positive_invalid_count > 0
                     and float(
-                        self.cfg.SHARK.LOSS.POSITIVE_NODE_CONSISTENCY_WEIGHT
+                        self.cfg.GFM4MTSAD.LOSS.POSITIVE_NODE_CONSISTENCY_WEIGHT
                     )
                     > 0.0
                 ),
                 "positive_invalid_enters_fidelity": bool(
                     positive_invalid_count > 0
-                    and float(self.cfg.SHARK.LOSS.FIDELITY_WEIGHT) > 0.0
+                    and float(self.cfg.GFM4MTSAD.LOSS.FIDELITY_WEIGHT) > 0.0
                 ),
                 "fine_valid_count_before_Wplus_gate": int(
                     fine_valid_mask.sum().item()
@@ -2640,7 +2640,7 @@ class SharkTrainer(Trainer):
         relation_contrast_target = str(
             getattr(
                 getattr(
-                    self.cfg.SHARK,
+                    self.cfg.GFM4MTSAD,
                     "RELATION_RESIDUAL_CONTRAST",
                     None,
                 ),
@@ -2678,7 +2678,7 @@ class SharkTrainer(Trainer):
                 loss_coarse_rank = ranking_loss(
                     outputs_anchor["window_score"][coarse_valid_mask],
                     outputs_coarse["window_score"][coarse_valid_mask],
-                    self.cfg.SHARK.LOSS.RANK_MARGIN,
+                    self.cfg.GFM4MTSAD.LOSS.RANK_MARGIN,
                 )
                 loss_coarse_bce = window_bce_loss(
                     outputs_anchor["window_score"][coarse_valid_mask],
@@ -3052,10 +3052,10 @@ class SharkTrainer(Trainer):
                         & ~propagated_node_mask[valid_negative_mask].bool()
                     ),
                     temperature=float(
-                        self.cfg.SHARK.RELATION_RESIDUAL_CONTRAST.TEMPERATURE
+                        self.cfg.GFM4MTSAD.RELATION_RESIDUAL_CONTRAST.TEMPERATURE
                     ),
                     unchanged_weight=float(
-                        self.cfg.SHARK.RELATION_RESIDUAL_CONTRAST.UNCHANGED_WEIGHT
+                        self.cfg.GFM4MTSAD.RELATION_RESIDUAL_CONTRAST.UNCHANGED_WEIGHT
                     ),
                     sample_weights=valid_sample_weights,
                 )
@@ -3067,7 +3067,7 @@ class SharkTrainer(Trainer):
                     outputs_anchor["graph_embedding"][valid_negative_mask],
                     outputs_positive["graph_embedding"][valid_negative_mask],
                     outputs_negative["graph_embedding"][valid_negative_mask],
-                    self.cfg.SHARK.CONTRAST.TEMPERATURE,
+                    self.cfg.GFM4MTSAD.CONTRAST.TEMPERATURE,
                     sample_weights=valid_sample_weights,
                 )
             else:
@@ -3086,19 +3086,19 @@ class SharkTrainer(Trainer):
                 outputs_anchor["graph_embedding"][valid_negative_mask],
                 outputs_positive["graph_embedding"][valid_negative_mask],
                 outputs_negative["graph_embedding"][valid_negative_mask],
-                self.cfg.SHARK.CONTRAST.TEMPERATURE,
+                self.cfg.GFM4MTSAD.CONTRAST.TEMPERATURE,
                 sample_weights=valid_sample_weights,
             )
         batch_hard_contrast_enabled = bool(
             getattr(
-                self.cfg.SHARK.LOSS,
+                self.cfg.GFM4MTSAD.LOSS,
                 "BATCH_HARD_CONTRAST_ENABLE",
                 False,
             )
         )
         node_aware_hard_contrast_enabled = bool(
             getattr(
-                self.cfg.SHARK.LOSS,
+                self.cfg.GFM4MTSAD.LOSS,
                 "NODE_AWARE_HARD_CONTRAST_ENABLE",
                 False,
             )
@@ -3131,16 +3131,16 @@ class SharkTrainer(Trainer):
                     outputs_anchor["direct_node_score_logits"][
                         valid_negative_mask
                     ],
-                    self.cfg.SHARK.CONTRAST.TEMPERATURE,
-                    self.cfg.SHARK.LOSS.NODE_AWARE_HARD_NORMAL_FRACTION,
-                    self.cfg.SHARK.LOSS.NODE_AWARE_HARD_NEGATIVE_COUNT,
+                    self.cfg.GFM4MTSAD.CONTRAST.TEMPERATURE,
+                    self.cfg.GFM4MTSAD.LOSS.NODE_AWARE_HARD_NORMAL_FRACTION,
+                    self.cfg.GFM4MTSAD.LOSS.NODE_AWARE_HARD_NEGATIVE_COUNT,
                     sample_weights=valid_sample_weights,
                 )
                 if valid_negative_mask.any()
                 else outputs_anchor["node_embeddings"].sum() * 0.0
             )
             node_contrast_blend = float(
-                self.cfg.SHARK.LOSS.NODE_AWARE_HARD_CONTRAST_BLEND
+                self.cfg.GFM4MTSAD.LOSS.NODE_AWARE_HARD_CONTRAST_BLEND
             )
             if not 0.0 <= node_contrast_blend <= 1.0:
                 raise ValueError(
@@ -3157,12 +3157,12 @@ class SharkTrainer(Trainer):
                 outputs_positive["graph_embedding"],
                 outputs_negative["graph_embedding"][valid_negative_mask],
                 outputs_anchor["window_score"],
-                self.cfg.SHARK.CONTRAST.TEMPERATURE,
-                self.cfg.SHARK.LOSS.BATCH_HARD_NORMAL_FRACTION,
-                self.cfg.SHARK.LOSS.BATCH_HARD_NEGATIVE_COUNT,
+                self.cfg.GFM4MTSAD.CONTRAST.TEMPERATURE,
+                self.cfg.GFM4MTSAD.LOSS.BATCH_HARD_NORMAL_FRACTION,
+                self.cfg.GFM4MTSAD.LOSS.BATCH_HARD_NEGATIVE_COUNT,
             )
             contrast_blend = float(
-                self.cfg.SHARK.LOSS.BATCH_HARD_CONTRAST_BLEND
+                self.cfg.GFM4MTSAD.LOSS.BATCH_HARD_CONTRAST_BLEND
             )
             if not 0.0 <= contrast_blend <= 1.0:
                 raise ValueError(
@@ -3299,22 +3299,22 @@ class SharkTrainer(Trainer):
             loss_pairwise_rank = ranking_loss(
                 outputs_anchor["window_score"][valid_negative_mask],
                 outputs_negative["window_score"][valid_negative_mask],
-                self.cfg.SHARK.LOSS.RANK_MARGIN,
+                self.cfg.GFM4MTSAD.LOSS.RANK_MARGIN,
                 sample_weights=valid_sample_weights,
             )
             tail_rank_enabled = bool(
-                getattr(self.cfg.SHARK.LOSS, "TAIL_RANK_ENABLE", False)
+                getattr(self.cfg.GFM4MTSAD.LOSS, "TAIL_RANK_ENABLE", False)
             )
             if tail_rank_enabled:
                 loss_tail_rank = hard_normal_tail_ranking_loss(
                     outputs_anchor["window_score"],
                     outputs_negative["window_score"][valid_negative_mask],
-                    self.cfg.SHARK.LOSS.RANK_MARGIN,
-                    self.cfg.SHARK.LOSS.TAIL_RANK_HARD_FRACTION,
+                    self.cfg.GFM4MTSAD.LOSS.RANK_MARGIN,
+                    self.cfg.GFM4MTSAD.LOSS.TAIL_RANK_HARD_FRACTION,
                     positive_normal_scores=outputs_positive["window_score"],
                     sample_weights=valid_sample_weights,
                 )
-                tail_blend = float(self.cfg.SHARK.LOSS.TAIL_RANK_BLEND)
+                tail_blend = float(self.cfg.GFM4MTSAD.LOSS.TAIL_RANK_BLEND)
                 if not 0.0 <= tail_blend <= 1.0:
                     raise ValueError("TAIL_RANK_BLEND must be in [0, 1]")
                 loss_rank = (
@@ -3345,7 +3345,7 @@ class SharkTrainer(Trainer):
             loss_rank = outputs_anchor["window_score"].sum() * 0.0
             loss_tail_rank = (
                 loss_rank
-                if bool(getattr(self.cfg.SHARK.LOSS, "TAIL_RANK_ENABLE", False))
+                if bool(getattr(self.cfg.GFM4MTSAD.LOSS, "TAIL_RANK_ENABLE", False))
                 else None
             )
             loss_window_bce = loss_rank
@@ -3356,7 +3356,7 @@ class SharkTrainer(Trainer):
             head_fidelity_loss(
                 outputs_negative["node_scores_calibrated"][valid_negative_mask],
                 outputs_negative["raw_node_scores"][valid_negative_mask],
-                self.cfg.SHARK.HEAD.EPS,
+                self.cfg.GFM4MTSAD.HEAD.EPS,
             )
             if valid_negative_mask.any()
             else outputs_negative["node_scores_calibrated"].sum() * 0.0
@@ -3365,12 +3365,12 @@ class SharkTrainer(Trainer):
             head_fidelity_loss(
                 outputs_anchor["node_scores_calibrated"],
                 outputs_anchor["raw_node_scores"],
-                self.cfg.SHARK.HEAD.EPS,
+                self.cfg.GFM4MTSAD.HEAD.EPS,
             )
             + head_fidelity_loss(
                 outputs_positive["node_scores_calibrated"],
                 outputs_positive["raw_node_scores"],
-                self.cfg.SHARK.HEAD.EPS,
+                self.cfg.GFM4MTSAD.HEAD.EPS,
             )
             + negative_fidelity
         ) / 3.0
@@ -3457,7 +3457,7 @@ class SharkTrainer(Trainer):
             if token_bridge is not None
             else 0.0
         )
-        contrastive_weight = float(self.cfg.SHARK.LOSS.CONTRASTIVE_WEIGHT)
+        contrastive_weight = float(self.cfg.GFM4MTSAD.LOSS.CONTRASTIVE_WEIGHT)
         if self.otrcl_enabled and bool(
             self.otrcl_settings.RELATIONAL_ENABLE
         ):
@@ -3466,13 +3466,13 @@ class SharkTrainer(Trainer):
             )
         loss = (
             contrastive_weight * loss_contrastive
-            + self.cfg.SHARK.LOSS.NODE_WEIGHT * loss_node
-            + self.cfg.SHARK.LOSS.RANK_WEIGHT * loss_rank
-            + self.cfg.SHARK.LOSS.WINDOW_BCE_WEIGHT * loss_window_bce
-            + self.cfg.SHARK.LOSS.FIDELITY_WEIGHT * loss_fidelity
-            + self.cfg.SHARK.LOSS.POSITIVE_NODE_CONSISTENCY_WEIGHT
+            + self.cfg.GFM4MTSAD.LOSS.NODE_WEIGHT * loss_node
+            + self.cfg.GFM4MTSAD.LOSS.RANK_WEIGHT * loss_rank
+            + self.cfg.GFM4MTSAD.LOSS.WINDOW_BCE_WEIGHT * loss_window_bce
+            + self.cfg.GFM4MTSAD.LOSS.FIDELITY_WEIGHT * loss_fidelity
+            + self.cfg.GFM4MTSAD.LOSS.POSITIVE_NODE_CONSISTENCY_WEIGHT
             * loss_positive_node_consistency
-            + self.cfg.SHARK.LOSS.UNMODIFIED_NODE_CONSISTENCY_WEIGHT
+            + self.cfg.GFM4MTSAD.LOSS.UNMODIFIED_NODE_CONSISTENCY_WEIGHT
             * loss_unmodified_node_consistency
             + retention_weight * loss_bridge_retention
         )
@@ -3506,7 +3506,7 @@ class SharkTrainer(Trainer):
         )
 
     def _build_counterfactual_node_evidence(self, outputs_anchor, adjacency):
-        sources = tuple(getattr(self.cfg.SHARK.SYNTHETIC, "EVIDENCE_SOURCES", ()))
+        sources = tuple(getattr(self.cfg.GFM4MTSAD.SYNTHETIC, "EVIDENCE_SOURCES", ()))
         evidence_parts = []
         for source in sources:
             if source == "direct_node_scores":
@@ -3518,7 +3518,7 @@ class SharkTrainer(Trainer):
             elif source == "relation_strength":
                 evidence_parts.append(self._relation_strength(adjacency).detach())
             else:
-                raise ValueError(f"Unsupported SHARK.SYNTHETIC.EVIDENCE_SOURCES entry: {source}")
+                raise ValueError(f"Unsupported GFM4MTSAD.SYNTHETIC.EVIDENCE_SOURCES entry: {source}")
 
         if not evidence_parts:
             return None
@@ -3569,7 +3569,7 @@ class SharkTrainer(Trainer):
         valid_negative_mask=None,
         consistency_exclusion_mask=None,
     ):
-        if not getattr(self.cfg.SHARK.SYNTHETIC, "PRINT_DIAGNOSTICS", False):
+        if not getattr(self.cfg.GFM4MTSAD.SYNTHETIC, "PRINT_DIAGNOSTICS", False):
             return
         if not self.model.training:
             return
@@ -3633,7 +3633,7 @@ class SharkTrainer(Trainer):
         unmodified_gain = score_gain.masked_select(unmodified_mask).sum() / unmodified_count
 
         top1 = direct_scores_negative.argmax(dim=1, keepdim=True)
-        k = min(max(int(self.cfg.SHARK.HEAD.TOPK), 1), direct_scores_negative.size(1))
+        k = min(max(int(self.cfg.GFM4MTSAD.HEAD.TOPK), 1), direct_scores_negative.size(1))
         topk = torch.topk(direct_scores_negative, k=k, dim=1).indices
         diagnostics.update({
             "direct_score_gap": float((direct_mean - unmodified_mean).cpu()),
@@ -3673,7 +3673,7 @@ class SharkTrainer(Trainer):
                 / unmodified_count
             )
             pooling_weights = outputs_negative["mil_pooling_weights"].detach()
-            stable_weights = pooling_weights.clamp_min(self.cfg.SHARK.HEAD.EPS)
+            stable_weights = pooling_weights.clamp_min(self.cfg.GFM4MTSAD.HEAD.EPS)
             pooling_entropy = -(stable_weights * stable_weights.log()).sum(dim=1)
 
             coupling_errors = []
@@ -3833,7 +3833,7 @@ class SharkTrainer(Trainer):
         diagnostics["type_direct_hrk"] = type_direct_hrk
 
     def _maybe_print_counterfactual_diagnostics(self):
-        if not getattr(self.cfg.SHARK.SYNTHETIC, "PRINT_DIAGNOSTICS", False):
+        if not getattr(self.cfg.GFM4MTSAD.SYNTHETIC, "PRINT_DIAGNOSTICS", False):
             return
         if not self.model.training:
             return
@@ -3950,7 +3950,7 @@ class SharkTrainer(Trainer):
                 f"marginal_delta={diagnostics.get('marginal_delta_rms', float('nan')):.3f} "
             )
         print(
-            "[SHARK synthetic] "
+            "[GFM4MTSAD synthetic] "
             f"progress={self._training_progress():.3f} "
             f"mode={diagnostics.get('edit_mode', 'legacy')} "
             f"strength={diagnostics.get('edit_strength', float('nan')):.3f} "
@@ -4051,14 +4051,14 @@ class SharkTrainer(Trainer):
         direct_node_mask,
         sample_weights=None,
     ):
-        if self.cfg.SHARK.LOSS.NODE_LOSS_TYPE != "intervention_gain_rank":
-            raise ValueError("SHARK v8.15 requires intervention_gain_rank node supervision")
+        if self.cfg.GFM4MTSAD.LOSS.NODE_LOSS_TYPE != "intervention_gain_rank":
+            raise ValueError("GFM4MTSAD v8.15 requires intervention_gain_rank node supervision")
         return intervention_gain_node_loss(
             outputs_anchor["direct_node_score_logits"],
             outputs_negative["direct_node_score_logits"],
             direct_node_mask,
-            self.cfg.SHARK.LOSS.NODE_GAIN_MARGIN,
-            detach_anchor=self.cfg.SHARK.LOSS.NODE_GAIN_DETACH_ANCHOR,
+            self.cfg.GFM4MTSAD.LOSS.NODE_GAIN_MARGIN,
+            detach_anchor=self.cfg.GFM4MTSAD.LOSS.NODE_GAIN_DETACH_ANCHOR,
             sample_weights=sample_weights,
         )
 

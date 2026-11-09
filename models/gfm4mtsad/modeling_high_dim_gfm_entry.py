@@ -3,11 +3,11 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from models.shark.high_dim_gfm_entry import HighDimResidualAnomalyGFM
-from models.shark.modeling_shark import SHARK
+from models.gfm4mtsad.high_dim_gfm_entry import HighDimResidualAnomalyGFM
+from models.gfm4mtsad.modeling_gfm4mtsad import GFM4MTSAD
 
 
-class HighDimGFMEntrySHARK(SHARK):
+class HighDimGFMEntryGFM4MTSAD(GFM4MTSAD):
     """Frozen v8.15 with one trainable adapter-nullspace GFM input residual."""
 
     def __init__(self, cfg):
@@ -17,7 +17,7 @@ class HighDimGFMEntrySHARK(SHARK):
         self.freeze_for_high_dim_entry_tuning()
 
     def _init_gfm(self, cfg):
-        if str(cfg.SHARK.GFM) != "AnomalyGFM":
+        if str(cfg.GFM4MTSAD.GFM) != "AnomalyGFM":
             raise ValueError("High-dimensional entry requires AnomalyGFM")
         return HighDimResidualAnomalyGFM(
             cfg,
@@ -27,7 +27,7 @@ class HighDimGFMEntrySHARK(SHARK):
     def freeze_for_high_dim_entry_tuning(self):
         for parameter in self.parameters():
             parameter.requires_grad = False
-        if bool(self.cfg.SHARK.HIGH_DIM_GFM_ENTRY.ENABLE):
+        if bool(self.cfg.GFM4MTSAD.HIGH_DIM_GFM_ENTRY.ENABLE):
             self.gfm.high_dim_entry.weight.requires_grad = True
 
     def load_frozen_v815_checkpoint(self, checkpoint_path):

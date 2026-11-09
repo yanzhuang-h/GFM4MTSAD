@@ -3,18 +3,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.anomalygfm.modeling_anomalygfm import AnomalyGFM
-from models.shark.adapter import build_adapter, build_sensor_graph_prompt
-from models.shark.builder import build_graph
-from models.shark.head import SharkHead
-from models.shark.imlp import DLinear_MLP
+from models.gfm4mtsad.adapter import build_adapter, build_sensor_graph_prompt
+from models.gfm4mtsad.builder import build_graph
+from models.gfm4mtsad.head import GFM4MTSADHead
+from models.gfm4mtsad.imlp import DLinear_MLP
 
 
-class SHARK(nn.Module):
+class GFM4MTSAD(nn.Module):
     def __init__(self, cfg):
-        super(SHARK, self).__init__()
+        super(GFM4MTSAD, self).__init__()
         self.cfg = cfg
-        if str(cfg.SHARK.HEAD.NAME) != "SharkHead":
-            raise ValueError("SHARK v8.15 only supports SHARK.HEAD.NAME=SharkHead")
+        if str(cfg.GFM4MTSAD.HEAD.NAME) != "GFM4MTSADHead":
+            raise ValueError("GFM4MTSAD v8.15 only supports GFM4MTSAD.HEAD.NAME=GFM4MTSADHead")
         self.imlp = self._init_imlp()
         self.graph_builder = build_graph(cfg)
         self.gfm_adapter = build_adapter(
@@ -27,27 +27,27 @@ class SHARK(nn.Module):
             feature_dim=cfg.ANOMALYGFM.INPUT_DIM,
         )
         self.gfm = self._init_gfm(cfg)
-        self.head = SharkHead(cfg, embedding_dim=self.gfm.embedding_dim)
+        self.head = GFM4MTSADHead(cfg, embedding_dim=self.gfm.embedding_dim)
 
         self._freeze_backbone()
 
     def _init_imlp(self):
-        mlp = self.cfg.SHARK.IMLP
+        mlp = self.cfg.GFM4MTSAD.IMLP
         mlp_classes = {
             "DLinear": DLinear_MLP,
         }
 
         if mlp not in mlp_classes:
-            raise ValueError(f"Unsupported SHARK.IMLP: {mlp}")
+            raise ValueError(f"Unsupported GFM4MTSAD.IMLP: {mlp}")
 
         imlp = mlp_classes[mlp](self.cfg)
         return imlp
 
     def _init_gfm(self, cfg):
-        name = cfg.SHARK.GFM
+        name = cfg.GFM4MTSAD.GFM
         if name == "AnomalyGFM":
             return AnomalyGFM(cfg)
-        raise ValueError(f"Unsupported SHARK.GFM: {name}")
+        raise ValueError(f"Unsupported GFM4MTSAD.GFM: {name}")
 
     def _freeze_backbone(self):
         if self.cfg.DLINEAR.FREEZE:
@@ -55,7 +55,7 @@ class SHARK(nn.Module):
             for param in self.imlp.parameters():
                 param.requires_grad = False
 
-        if self.cfg.SHARK.ADAPTER.FREEZE:
+        if self.cfg.GFM4MTSAD.ADAPTER.FREEZE:
             self.gfm_adapter.eval()
             for param in self.gfm_adapter.parameters():
                 param.requires_grad = False
@@ -76,10 +76,10 @@ class SHARK(nn.Module):
             self.sensor_graph_prompt.freeze()
 
     def train(self, mode=True):
-        super(SHARK, self).train(mode)
+        super(GFM4MTSAD, self).train(mode)
         if self.cfg.DLINEAR.FREEZE:
             self.imlp.eval()
-        if self.cfg.SHARK.ADAPTER.FREEZE:
+        if self.cfg.GFM4MTSAD.ADAPTER.FREEZE:
             self.gfm_adapter.eval()
         if (
             hasattr(self.sensor_graph_prompt, "enabled")
@@ -120,7 +120,7 @@ class SHARK(nn.Module):
         peft_trainable = gfm_trainable + sensor_prompt_trainable
         peft_total = gfm_total + sensor_prompt_total
         return {
-            "strategy": getattr(self.cfg.SHARK.GFM_TUNING, "STRATEGY", "frozen"),
+            "strategy": getattr(self.cfg.GFM4MTSAD.GFM_TUNING, "STRATEGY", "frozen"),
             "total_params": total,
             "trainable_params": trainable,
             "trainable_ratio": trainable / max(total, 1),
@@ -263,13 +263,13 @@ class SHARK(nn.Module):
             )
         )
         fit_evidence_reference = supports_evidence_reference and bool(
-            getattr(self.cfg.SHARK.HEAD, "NORMAL_CALIBRATION_ENABLE", False)
+            getattr(self.cfg.GFM4MTSAD.HEAD, "NORMAL_CALIBRATION_ENABLE", False)
         )
         fit_mil_reference = (
             supports_mil_reference
             and (
                 bool(getattr(self.head, "uses_mil_reference", False))
-                or getattr(self.cfg.SHARK.HEAD, "EVIDENCE_FUSION_MODE", "")
+                or getattr(self.cfg.GFM4MTSAD.HEAD, "EVIDENCE_FUSION_MODE", "")
                 == "counterfactual_mil"
             )
         )
@@ -330,7 +330,7 @@ class SHARK(nn.Module):
             evidence = torch.cat(evidence_batches, dim=0)
             mean = evidence.mean(dim=0)
             scale = evidence.std(dim=0, unbiased=False).clamp_min(
-                float(self.cfg.SHARK.HEAD.NORMAL_CALIBRATION_MIN_SCALE)
+                float(self.cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_MIN_SCALE)
             )
             self.head.set_evidence_reference(mean, scale, evidence)
         elif fit_evidence_reference and old_evidence_reference["fitted"]:
@@ -352,7 +352,7 @@ class SHARK(nn.Module):
             mil_nodes = torch.cat(mil_node_batches, dim=0)
             mil_mean = mil_nodes.mean(dim=0)
             mil_scale = mil_nodes.std(dim=0, unbiased=False).clamp_min(
-                float(self.cfg.SHARK.HEAD.NORMAL_CALIBRATION_MIN_SCALE)
+                float(self.cfg.GFM4MTSAD.HEAD.NORMAL_CALIBRATION_MIN_SCALE)
             )
             self.head.set_mil_node_reference(mil_mean, mil_scale, mil_nodes)
         elif fit_mil_reference and old_mil_reference["fitted"]:

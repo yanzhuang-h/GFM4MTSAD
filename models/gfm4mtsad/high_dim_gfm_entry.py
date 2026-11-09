@@ -72,7 +72,7 @@ class HighDimResidualAnomalyGFM(AnomalyGFM):
             getattr(cfg.ANOMALYGFM, "INITIALIZATION", "pretrained")
         )
         super().__init__(cfg, initialization=initialization)
-        settings = cfg.SHARK.HIGH_DIM_GFM_ENTRY
+        settings = cfg.GFM4MTSAD.HIGH_DIM_GFM_ENTRY
         self.high_dim_entry = AdapterNullspaceInputResidual(
             input_dim=int(high_dim_input),
             output_dim=int(self.embedding_dim),
@@ -83,7 +83,7 @@ class HighDimResidualAnomalyGFM(AnomalyGFM):
     def configure_tuning(self):
         super().configure_tuning()
         if hasattr(self, "high_dim_entry"):
-            enabled = bool(self.cfg.SHARK.HIGH_DIM_GFM_ENTRY.ENABLE)
+            enabled = bool(self.cfg.GFM4MTSAD.HIGH_DIM_GFM_ENTRY.ENABLE)
             for parameter in self.high_dim_entry.parameters():
                 parameter.requires_grad = enabled
 
@@ -195,7 +195,7 @@ class HighDimResidualAnomalyGFM(AnomalyGFM):
         weight = self.high_dim_entry.weight.detach().float()
         return {
             "high_dim_entry_enabled": bool(
-                self.cfg.SHARK.HIGH_DIM_GFM_ENTRY.ENABLE
+                self.cfg.GFM4MTSAD.HIGH_DIM_GFM_ENTRY.ENABLE
             ),
             "high_dim_entry_input_dim": self.high_dim_entry.input_dim,
             "high_dim_entry_output_dim": self.high_dim_entry.output_dim,

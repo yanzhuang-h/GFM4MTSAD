@@ -6,7 +6,7 @@ import torch.nn.functional as F
 class FeatureAdapter(nn.Module):
     def __init__(self, cfg, input_dim, output_dim):
         super(FeatureAdapter, self).__init__()
-        self.method = cfg.SHARK.ADAPTER.METHOD
+        self.method = cfg.GFM4MTSAD.ADAPTER.METHOD
         self.input_dim = input_dim
         self.output_dim = output_dim
         if self.output_dim > self.input_dim:
@@ -14,7 +14,7 @@ class FeatureAdapter(nn.Module):
         self.proj = nn.Linear(self.input_dim, self.output_dim, bias=True)
         self._init_slice_projection()
         self.fitted = self.method != "pca"
-        if cfg.SHARK.ADAPTER.FREEZE:
+        if cfg.GFM4MTSAD.ADAPTER.FREEZE:
             self.freeze()
 
     def _init_slice_projection(self):
@@ -55,10 +55,10 @@ class FeatureAdapter(nn.Module):
 
 
 def build_adapter(cfg, input_dim, output_dim):
-    name = cfg.SHARK.ADAPTER.NAME
+    name = cfg.GFM4MTSAD.ADAPTER.NAME
     if name == "FeatureAdapter":
         return FeatureAdapter(cfg, input_dim, output_dim)
-    raise ValueError(f"Unsupported SHARK.ADAPTER.NAME: {name}")
+    raise ValueError(f"Unsupported GFM4MTSAD.ADAPTER.NAME: {name}")
 
 
 class SensorGraphPrompt(nn.Module):
@@ -66,11 +66,11 @@ class SensorGraphPrompt(nn.Module):
 
     def __init__(self, cfg, feature_dim):
         super(SensorGraphPrompt, self).__init__()
-        tuning_enabled = bool(getattr(cfg.SHARK.GFM_TUNING, "ENABLE", False))
-        strategy = getattr(cfg.SHARK.GFM_TUNING, "STRATEGY", "frozen")
+        tuning_enabled = bool(getattr(cfg.GFM4MTSAD.GFM_TUNING, "ENABLE", False))
+        strategy = getattr(cfg.GFM4MTSAD.GFM_TUNING, "STRATEGY", "frozen")
         self.enabled = tuning_enabled and self._uses_sensor_graph_prompt(strategy)
-        self.scale = float(cfg.SHARK.GFM_TUNING.SENSOR_GRAPH_PROMPT_SCALE)
-        self.dropout = nn.Dropout(float(cfg.SHARK.GFM_TUNING.SENSOR_GRAPH_PROMPT_DROPOUT))
+        self.scale = float(cfg.GFM4MTSAD.GFM_TUNING.SENSOR_GRAPH_PROMPT_SCALE)
+        self.dropout = nn.Dropout(float(cfg.GFM4MTSAD.GFM_TUNING.SENSOR_GRAPH_PROMPT_DROPOUT))
 
         self.node_prompt = nn.Parameter(torch.zeros(feature_dim))
         self.graph_prompt = nn.Parameter(torch.zeros(feature_dim))
@@ -78,7 +78,7 @@ class SensorGraphPrompt(nn.Module):
             nn.Linear(feature_dim + 1, feature_dim),
             nn.Tanh(),
         )
-        self._init_parameters(float(cfg.SHARK.GFM_TUNING.SENSOR_GRAPH_PROMPT_INIT_STD))
+        self._init_parameters(float(cfg.GFM4MTSAD.GFM_TUNING.SENSOR_GRAPH_PROMPT_INIT_STD))
 
         if not self.enabled:
             self.freeze()

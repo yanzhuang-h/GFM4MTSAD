@@ -1,4 +1,4 @@
-"""Frozen two-stage normal-tail calibration for completed SHARK-IPRA runs."""
+"""Frozen two-stage normal-tail calibration for completed GFM4MTSAD-IPRA runs."""
 
 from __future__ import annotations
 
@@ -300,7 +300,7 @@ def main() -> None:
     if evidence.ndim != 2 or evidence.shape[0] != labels.size:
         raise ValueError("test evidence must be [test windows, evidence sources]")
     if test_raw.size != labels.size or test_current.size != labels.size:
-        raise ValueError("SHARK score and label counts differ")
+        raise ValueError("GFM4MTSAD score and label counts differ")
     names = _load_names(paths["evidence_names"], evidence.shape[1])
     if names != ["direct", "local", "relation", "context"]:
         raise ValueError(f"unexpected evidence source order: {names}")
@@ -358,7 +358,7 @@ def main() -> None:
     gate_threshold = -math.log(REGISTERED_TAIL_PROBABILITY)
     gate_active = variants["f1a_train_ecdf_final"] >= gate_threshold
     report = {
-        "schema_version": "SHARK-IPRA-FROZEN-TAIL-CALIBRATION-V2",
+        "schema_version": "GFM4MTSAD-IPRA-FROZEN-TAIL-CALIBRATION-V2",
         "entity": args.entity,
         "source_arm": source_arm,
         "stage_a": {
@@ -371,7 +371,7 @@ def main() -> None:
             "normal_scalar_reference": "train_scores",
             "scalar_calibration": "empirical_upper_tail_negative_log_probability",
             "evidence_calibration": (
-                "existing_train-normal soft_ecdf_two_sided values saved by SHARK"
+                "existing_train-normal soft_ecdf_two_sided values saved by GFM4MTSAD"
             ),
             "evidence_consensus": "mean_of_largest_two_of_four_evidence_scores",
             "fixed_blend": REGISTERED_BLEND,

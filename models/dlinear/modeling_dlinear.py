@@ -94,7 +94,7 @@ class DLinear(nn.Module):
     def forward_channel(self, x, channel_index):
         """Encode one channel without evaluating unrelated sensor branches.
 
-        DLinear's decomposition is channel independent.  The SHARK v2.2
+        DLinear's decomposition is channel independent.  The GFM4MTSAD v2.2
         negative selector exploits that contract to batch candidate edits for
         one directly intervened sensor while producing exactly the same token
         as a full ``forward`` call.

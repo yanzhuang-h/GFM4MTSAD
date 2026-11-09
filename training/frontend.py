@@ -7,7 +7,7 @@ import torch
 from yacs.config import CfgNode
 from config import get_cfg_defaults
 from datasets.loader import get_val_dataloader
-from models.shark.modeling_information_preserving_shark import InformationPreservingUnifiedSHARK
+from models.gfm4mtsad.modeling_information_preserving_gfm4mtsad import InformationPreservingUnifiedGFM4MTSAD
 from training.joint import JointTrainer, assert_joint_trainables
 from training import data as profile
 from training.assets import ROOT, SPECS, CURRENT_OWLEYE_SHA256, sha256 as _sha256, asset_path
@@ -63,7 +63,7 @@ def build_current_config(
     cfg = get_cfg_defaults()
     _, dropped = _known_tree(source, cfg)
     _merge_verified_source_cfg(cfg, source)
-    if cfg.DATA.NAME != entity or str(cfg.SHARK.GFM).lower() != backend:
+    if cfg.DATA.NAME != entity or str(cfg.GFM4MTSAD.GFM).lower() != backend:
         raise ValueError("source config entity/backend mismatch")
 
     cfg.SEED = int(seed)
@@ -81,34 +81,34 @@ def build_current_config(
     cfg.SOLVER.MAX_EPOCH = 30
     cfg.DLINEAR.FREEZE = False
     cfg.TEST.ENABLE = False
-    cfg.SHARK.UNIFIED.FRONTEND_CHECKPOINT = ""
-    cfg.SHARK.UNIFIED.FRONTEND_SHA256 = ""
-    experiment_id = f"SHARK-WARM-FRONTEND-{entity}-SEED{seed}-{backend}"
-    cfg.SHARK.UNIFIED.EXPERIMENT_ID = experiment_id
-    cfg.SHARK.GFM_BACKEND.EXPERIMENT_ID = experiment_id
+    cfg.GFM4MTSAD.UNIFIED.FRONTEND_CHECKPOINT = ""
+    cfg.GFM4MTSAD.UNIFIED.FRONTEND_SHA256 = ""
+    experiment_id = f"GFM4MTSAD-WARM-FRONTEND-{entity}-SEED{seed}-{backend}"
+    cfg.GFM4MTSAD.UNIFIED.EXPERIMENT_ID = experiment_id
+    cfg.GFM4MTSAD.GFM_BACKEND.EXPERIMENT_ID = experiment_id
     cfg.RESULT_DIR = str(frontend_root.resolve())
     cfg.TRAIN.CHECKPOINT_DIR = cfg.RESULT_DIR
-    cfg.SHARK.EVAL.RESULT_DIR = str(eval_root.resolve())
+    cfg.GFM4MTSAD.EVAL.RESULT_DIR = str(eval_root.resolve())
     cfg.DATA.BASE_DIR = (
         str(data_dir.resolve()) if data_dir is not None
         else asset_path(assets, "data_dir")
     )
     cfg.ANOMALYGFM.CHECKPOINT_PATH = asset_path(assets, "anomalygfm_checkpoint", required=backend == "anomalygfm")
     cfg.ANOMALYGFM.SOURCE_MODEL_PATH = asset_path(assets, "anomalygfm_source", required=backend == "anomalygfm")
-    prefixes = list(cfg.SHARK.GFM_BACKEND.TRAINABLE_PREFIXES)
+    prefixes = list(cfg.GFM4MTSAD.GFM_BACKEND.TRAINABLE_PREFIXES)
     if "imlp." not in prefixes:
         prefixes.append("imlp.")
-    cfg.SHARK.GFM_BACKEND.TRAINABLE_PREFIXES = prefixes
-    cfg.SHARK.SYNTHETIC.COUNTERFACTUAL_IMPLEMENTATION = "batched_precomputed"
-    cfg.SHARK.ROOT_PROP.CONTROLLED_EVAL_ENABLE = False
-    cfg.SHARK.UNIFIED.RUN_MODE = "primary"
+    cfg.GFM4MTSAD.GFM_BACKEND.TRAINABLE_PREFIXES = prefixes
+    cfg.GFM4MTSAD.SYNTHETIC.COUNTERFACTUAL_IMPLEMENTATION = "batched_precomputed"
+    cfg.GFM4MTSAD.ROOT_PROP.CONTROLLED_EVAL_ENABLE = False
+    cfg.GFM4MTSAD.UNIFIED.RUN_MODE = "primary"
     if backend == "owleye":
         checkpoint = Path(owleye_checkpoint or asset_path(assets, "owleye_checkpoint")).resolve()
         if _sha256(checkpoint) != CURRENT_OWLEYE_SHA256:
             raise ValueError("OWLEYE pretrained checkpoint is not the verified artifact")
-        cfg.SHARK.GFM_BACKEND.CHECKPOINT_PATH = str(checkpoint)
-        cfg.SHARK.GFM_BACKEND.CHECKPOINT_SHA256 = CURRENT_OWLEYE_SHA256
-        cfg.SHARK.GFM_BACKEND.SOURCE_MODEL_PATH = asset_path(assets, "owleye_source")
+        cfg.GFM4MTSAD.GFM_BACKEND.CHECKPOINT_PATH = str(checkpoint)
+        cfg.GFM4MTSAD.GFM_BACKEND.CHECKPOINT_SHA256 = CURRENT_OWLEYE_SHA256
+        cfg.GFM4MTSAD.GFM_BACKEND.SOURCE_MODEL_PATH = asset_path(assets, "owleye_source")
 
     n_vars = {"SMD_1-1": 38, "SMAP_T-3": 25, "MSL_P-15": 55}
     cfg.DATA.N_VAR = n_vars[entity]
@@ -124,7 +124,7 @@ def build_current_config(
     cfg.RESULT_DIR = str((Path(cfg.RESULT_DIR) / entity).resolve())
 
     report = {
-        "schema_version": "SHARK-WARM-FRONTEND-UNIFIED-TRAINING-V2",
+        "schema_version": "GFM4MTSAD-WARM-FRONTEND-UNIFIED-TRAINING-V2",
         "entity": entity,
         "backend": backend,
         "seed": int(seed),
@@ -136,7 +136,7 @@ def build_current_config(
         "dropped_legacy_key_count": len(dropped),
         "dropped_legacy_keys": sorted(dropped),
         "frontend_checkpoint_loaded": False,
-        "model_class": "InformationPreservingUnifiedSHARK",
+        "model_class": "InformationPreservingUnifiedGFM4MTSAD",
         "trainer_class": "JointTrainer",
         "test_enabled": False,
         "test_loader_substituted_with_train_normal_validation": True,
@@ -168,9 +168,9 @@ def train_frontend(cfg, report: dict, *, config_output: Path, report_output: Pat
     device = torch.device(device_override or ("cuda:0" if torch.cuda.is_available() else "cpu"))
     if device.type == "cuda":
         torch.cuda.set_device(device)
-    model = InformationPreservingUnifiedSHARK(cfg).to(device)
+    model = InformationPreservingUnifiedGFM4MTSAD(cfg).to(device)
     if not hasattr(model, "imlp"):
-        raise RuntimeError("SHARK model has no DLinear frontend")
+        raise RuntimeError("GFM4MTSAD model has no DLinear frontend")
     if not any(parameter.requires_grad for parameter in model.imlp.parameters()):
         raise RuntimeError("DLinear frontend is frozen in frontend training")
     initial_digest = _frontend_digest(model.imlp)

@@ -4,17 +4,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.shark.adapter import build_adapter, build_sensor_graph_prompt
-from models.shark.builder import build_graph
-from models.shark.gfm_backend import GFMBackendInput
-from models.shark.gfm_backend_registry import build_gfm_backend
-from models.shark.head import SharkHead
-from models.shark.modeling_anchored_mil_scale import AnchoredMILScaleSHARK
-from models.shark.modeling_shark import SHARK
+from models.gfm4mtsad.adapter import build_adapter, build_sensor_graph_prompt
+from models.gfm4mtsad.builder import build_graph
+from models.gfm4mtsad.gfm_backend import GFMBackendInput
+from models.gfm4mtsad.gfm_backend_registry import build_gfm_backend
+from models.gfm4mtsad.head import GFM4MTSADHead
+from models.gfm4mtsad.modeling_anchored_mil_scale import AnchoredMILScaleGFM4MTSAD
+from models.gfm4mtsad.modeling_gfm4mtsad import GFM4MTSAD
 
 
-class GFMBackendSHARK(AnchoredMILScaleSHARK):
-    """Backend-neutral SHARK shell with compatible state-dict boundaries."""
+class GFMBackendGFM4MTSAD(AnchoredMILScaleGFM4MTSAD):
+    """Backend-neutral GFM4MTSAD shell with compatible state-dict boundaries."""
 
     def __init__(self, cfg):
         nn.Module.__init__(self)
@@ -25,8 +25,8 @@ class GFMBackendSHARK(AnchoredMILScaleSHARK):
         self._frozen_v815_checkpoint = None
         self._shared_frontend_loaded = False
         self._shared_frontend_checkpoint = None
-        if str(cfg.SHARK.HEAD.NAME) != "SharkHead":
-            raise ValueError("Backend SHARK requires SHARK.HEAD.NAME=SharkHead")
+        if str(cfg.GFM4MTSAD.HEAD.NAME) != "GFM4MTSADHead":
+            raise ValueError("Backend GFM4MTSAD requires GFM4MTSAD.HEAD.NAME=GFM4MTSADHead")
 
         self.imlp = self._init_imlp()
         self.graph_builder = build_graph(cfg)
@@ -41,7 +41,7 @@ class GFMBackendSHARK(AnchoredMILScaleSHARK):
             cfg,
             feature_dim=spec.token_dim,
         )
-        self.head = SharkHead(cfg, embedding_dim=spec.embedding_dim)
+        self.head = GFM4MTSADHead(cfg, embedding_dim=spec.embedding_dim)
         self._freeze_backbone()
         self.freeze_for_backend_tuning()
 
@@ -62,7 +62,7 @@ class GFMBackendSHARK(AnchoredMILScaleSHARK):
     def freeze_for_backend_tuning(self):
         for parameter in self.parameters():
             parameter.requires_grad = False
-        backend_cfg = getattr(self.cfg.SHARK, "GFM_BACKEND", None)
+        backend_cfg = getattr(self.cfg.GFM4MTSAD, "GFM_BACKEND", None)
         training_mode = str(
             getattr(
                 backend_cfg,
@@ -123,7 +123,7 @@ class GFMBackendSHARK(AnchoredMILScaleSHARK):
     def _mil_scale_policy(self):
         return str(
             getattr(
-                getattr(self.cfg.SHARK, "GFM_BACKEND", None),
+                getattr(self.cfg.GFM4MTSAD, "GFM_BACKEND", None),
                 "MIL_SCALE_POLICY",
                 "anchored_pre_adaptation",
             )
@@ -133,7 +133,7 @@ class GFMBackendSHARK(AnchoredMILScaleSHARK):
     def fit_feature_adapter(self, loader, max_batches=None):
         if not self.gfm.backend_spec().uses_declared_node_tokens:
             return None
-        return SHARK.fit_feature_adapter(
+        return GFM4MTSAD.fit_feature_adapter(
             self,
             loader,
             max_batches=max_batches,
@@ -143,7 +143,7 @@ class GFMBackendSHARK(AnchoredMILScaleSHARK):
     def fit_evidence_calibrator(self, loader, max_batches=None):
         policy = self._mil_scale_policy()
         if policy == "refit_each_epoch":
-            return SHARK.fit_evidence_calibrator(
+            return GFM4MTSAD.fit_evidence_calibrator(
                 self,
                 loader,
                 max_batches=max_batches,
@@ -157,7 +157,7 @@ class GFMBackendSHARK(AnchoredMILScaleSHARK):
 
     def mil_reference_diagnostics(self):
         if self._mil_scale_policy() == "refit_each_epoch":
-            return SHARK.mil_reference_diagnostics(self)
+            return GFM4MTSAD.mil_reference_diagnostics(self)
         return super().mil_reference_diagnostics()
 
     def load_frozen_backend_checkpoint(self, checkpoint_path):
@@ -232,7 +232,7 @@ class GFMBackendSHARK(AnchoredMILScaleSHARK):
         }
 
     def trainable_parameter_summary(self):
-        summary = dict(SHARK.trainable_parameter_summary(self))
+        summary = dict(GFM4MTSAD.trainable_parameter_summary(self))
         if self._mil_scale_policy() == "anchored_pre_adaptation":
             summary.update(self.anchored_mil_scale_diagnostics())
         spec = self.gfm.backend_spec()
@@ -248,7 +248,7 @@ class GFMBackendSHARK(AnchoredMILScaleSHARK):
         summary["candidate_training_mode"] = (
             str(
                 getattr(
-                    getattr(self.cfg.SHARK, "GFM_BACKEND", None),
+                    getattr(self.cfg.GFM4MTSAD, "GFM_BACKEND", None),
                     "TRAINING_MODE",
                     "backend_adaptation_only",
                 )

@@ -25,7 +25,7 @@ class GlobalGraphVARMechanism:
     )
 
     def __init__(self, cfg, adaptive=False):
-        synthetic = cfg.SHARK.SYNTHETIC
+        synthetic = cfg.GFM4MTSAD.SYNTHETIC
         self.adaptive = bool(adaptive)
         self.expected_n_nodes = int(cfg.DATA.N_VAR)
         self.lags = max(int(getattr(synthetic, "GRAPH_VAR_LAGS", 2)), 1)
@@ -1353,7 +1353,7 @@ class GlobalGraphVARMechanism:
         """Return only the train-normal evidence needed for positive selection.
 
         This path is deliberately restricted to the two quantities consumed
-        by SHARK positive-view screening. It skips conditional peak/top-q and
+        by GFM4MTSAD positive-view screening. It skips conditional peak/top-q and
         support-distance (including discrete-state) calculations, which are
         still computed by :meth:`evidence_windows` for other consumers.
         """

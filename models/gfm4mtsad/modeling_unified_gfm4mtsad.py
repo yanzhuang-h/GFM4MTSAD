@@ -1,20 +1,20 @@
 import torch
 
-from models.shark.differentiable_token_bridge import (
+from models.gfm4mtsad.differentiable_token_bridge import (
     build_differentiable_token_bridge,
 )
-from models.shark.modeling_gfm_backend import GFMBackendSHARK
+from models.gfm4mtsad.modeling_gfm_backend import GFMBackendGFM4MTSAD
 
 
-class UnifiedSHARK(GFMBackendSHARK):
-    """The single three-module SHARK path used by the formal benchmark."""
+class UnifiedGFM4MTSAD(GFMBackendGFM4MTSAD):
+    """The single three-module GFM4MTSAD path used by the formal benchmark."""
 
     def __init__(self, cfg):
         super().__init__(cfg)
         spec = self.gfm.backend_spec()
         self.gfm_adapter = build_differentiable_token_bridge(
             cfg,
-            source_dim=int(cfg.SHARK.TOKEN_BRIDGE.SOURCE_DIM),
+            source_dim=int(cfg.GFM4MTSAD.TOKEN_BRIDGE.SOURCE_DIM),
             token_dim=int(spec.token_dim),
         )
         self._bridge_initialized = False
@@ -81,7 +81,7 @@ class UnifiedSHARK(GFMBackendSHARK):
     def trainable_parameter_summary(self):
         summary = dict(super().trainable_parameter_summary())
         summary.update({
-            "formal_architecture": "three_module_unified_shark_v1",
+            "formal_architecture": "three_module_unified_gfm4mtsad_v1",
             "bridge_initialized": self._bridge_initialized,
             "bridge_parameter_count": sum(
                 parameter.numel()

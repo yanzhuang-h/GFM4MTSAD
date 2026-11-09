@@ -5,7 +5,7 @@
 公共 API 计算。这样模型运行时不需要导入实验脚本，缓存重放与在线评测也
 能复用同一套公式。
 
-需要特别区分两种 PR 面积：SHARK/CAROTS 的 ``AUPRC`` 是梯形面积，
+需要特别区分两种 PR 面积：GFM4MTSAD/CAROTS 的 ``AUPRC`` 是梯形面积，
 OracleAD/TSB-AD 的 ``A-PR`` 是 Average Precision。本模块同时返回二者，
 调用方不得用一个字段覆盖另一个字段。
 """
@@ -21,7 +21,7 @@ import numpy as np
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 
-ORACLEAD_METRIC_PROTOCOL_VERSION = "SHARK-ORACLEAD-METRICS-V1"
+ORACLEAD_METRIC_PROTOCOL_VERSION = "GFM4MTSAD-ORACLEAD-METRICS-V1"
 TSB_AD_FORMULA_VERSION = "TSB-AD-1.5"
 DEFAULT_ORACLE_THRESHOLD_COUNT = 100
 DEFAULT_VUS_TOLERANCE = 100
@@ -316,7 +316,7 @@ def evaluate_oraclead_paper_metrics(
     if threshold_count < 1:
         raise ValueError("OracleAD paper threshold count must be positive")
     return {
-        "schema_version": "SHARK-ORACLEAD-PAPER-200-V1",
+        "schema_version": "GFM4MTSAD-ORACLEAD-PAPER-200-V1",
         "source": "OracleAD-2026-Appendix-D.3",
         "threshold_protocol": {
             "threshold_count": threshold_count,
@@ -584,7 +584,7 @@ def evaluate_oraclead_metrics(
             threshold_count=vus_threshold_count,
         )
         average_precision = float(average_precision_score(labels, scores))
-        backend = "shark.vectorized_tsb_ad_formula_fallback.v1"
+        backend = "gfm4mtsad.vectorized_tsb_ad_formula_fallback.v1"
     return {
         "schema_version": ORACLEAD_METRIC_PROTOCOL_VERSION,
         "source": "OracleAD-2026-Appendix-B-plus-TSB-AD-1.5",
