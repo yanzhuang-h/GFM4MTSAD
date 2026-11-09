@@ -1,0 +1,231 @@
+# Main-training recipe; runtime paths are provided through the asset file.
+CAROTS:
+  LOSS_NAMES:
+  - Loss
+  METRIC_NAMES:
+  - Loss
+CUTS_PLUS:
+  FILL_POLICY: null
+  N_GROUPS: 55
+  N_NODES: 55
+  TRAIN:
+    METRIC_BEST: .inf
+DATA:
+  NAME: MSL_P-15
+  N_VAR: 55
+  WIN_SIZE: 60
+DLINEAR:
+  FREEZE: true
+GRAPHBUILDER:
+  REFERENCE_PRIOR_ENABLE: true
+ITRANSFORMER:
+  c_out: 55
+  enc_in: 55
+RESULT_DIR: outputs
+SHARK:
+  CONTRAST:
+    GRAPH_CONSISTENT_POSITIVE_ENABLE: true
+    GRAPH_CONSISTENT_POSITIVE_GRAPH_QUANTILE: 0.5
+    GRAPH_CONSISTENT_POSITIVE_SELECTOR: max_temporal_after_graph_gate
+  EVAL:
+    RESULT_DIR: outputs/scores
+  GFM: OWLEYE
+  GFM_BACKEND:
+    CHECKPOINT_PATH: ''
+    CHECKPOINT_SHA256: fd35544a57e8e6ffa271ad0e68719fdec8648fd2a2d08c7db5de7f62ebc57fa2
+    EXPERIMENT_ID: GFM4MTSAD
+    IN_CONTEXT_NODES: 10
+    IN_CONTEXT_SELECTION: top_degree
+    MIL_SCALE_POLICY: refit_each_epoch
+    SOURCE_MODEL_PATH: ''
+    SOURCE_MODEL_SHA256: b1944d38298ce23163ab6f9d64a8607d46063bc7c9a5a0dd84285dde5746d319
+    SOURCE_PATTERN_LIMIT: 64
+    TRAINABLE_PREFIXES:
+    - gfm_adapter.
+    - information_residual.
+    - head.direct_node_head.
+    TRAINING_MODE: frozen_backend_shared_outer
+    TRAIN_BACKEND_ADAPTATION: true
+    TRAIN_INPUT_PROMPT: true
+    TRAIN_NATIVE_PEFT: true
+    TRAIN_PROJECTION: false
+    TRAIN_PROMPT: false
+    TRAIN_TEMPERATURE: false
+    TRUNCATION_RATIO: 0.1
+    USE_DECLARED_NODE_TOKENS: true
+  GFM_TUNING:
+    ENABLE: false
+    STRATEGY: frozen
+    UNFREEZE_KEYWORDS: []
+  HEAD:
+    AGREEMENT_SOURCES:
+    - direct
+    - local
+    - relation
+    - context
+    CONSERVATIVE_SOURCES:
+    - direct
+    - local
+    - relation
+    - context
+    CONTRAST_SOURCES:
+    - direct
+    - local
+    - relation
+    - context
+    EVIDENCE_SOURCE_NAMES:
+    - direct
+    - local
+    - relation
+    - context
+    EXPERT_NAMES:
+    - spike
+    - distribution
+    - graph_context
+    FUSION_SOURCE_NAMES:
+    - spike
+    - distribution
+    - graph_context
+    RELATION_AWARE_SOURCES:
+    - relation
+    SAFE_CALIBRATED_SOURCES:
+    - direct
+    - local
+    - relation
+    - context
+    SOURCE_CONSISTENT_SOURCES:
+    - direct
+    - local
+    - relation
+    - context
+  HIGH_DIM_GFM_ENTRY:
+    ENABLE: false
+    EPS: 1.0e-06
+    SCALE: 1.0
+  INFORMATION_PRESERVING_RESIDUAL:
+    ENABLE: true
+    EPS: 1.0e-06
+    FUSION: shared_gfm_output_boundary
+    GATE_INIT: 0.0
+    INIT: orthogonal_down_zero_up
+    RANK: 16
+    SCALE: 1.0
+    SOURCE: token_bridge_nullspace
+    SOURCE_DIM: 128
+  LOSS:
+    FIDELITY_WEIGHT: 0.0
+  LOSS_NAMES:
+  - Total
+  - Contrastive
+  - Node
+  - Rank
+  - WindowBCE
+  - Fidelity
+  - DirectNode
+  - PositiveNodeConsistency
+  - UnmodifiedNodeConsistency
+  METRIC_NAMES:
+  - Loss
+  NODE_TO_TIME_CAUSAL_CALIBRATION:
+    CENTER: median
+    ENABLE: true
+    INCLUDE_CURRENT: false
+    MAD_SCALE: 1.4826
+    MIN_HISTORY: 16
+    MIN_SCALE: 1.0e-06
+    REFERENCE_WINDOW: 1024
+    SCALE: mad
+    SOURCE: past_unlabeled_scores_only
+  NODE_TO_TIME_RELIABILITY_GATE:
+    ENABLE: true
+    MAJORITY_THRESHOLD: 0.5
+    RULE: causal_below_majority_else_raw
+    SIGNAL: normal_mechanism_valid_node_ratio
+    SOURCE: normal_training_windows_only
+    TARGET_LABELS_USED_FOR_CONFIGURATION: false
+  RELATION_RESIDUAL_CONTRAST:
+    PRIMARY_LOSSES:
+    - rank
+    - window_bce
+  ROOT_PROP:
+    CONTROLLED_EVAL_ENABLE: true
+    CONTROLLED_EVAL_MAX_WINDOWS: 512
+  SYNTHETIC:
+    DIAGNOSTIC_TYPES:
+    - propagation_break
+    EVENT_SCALE_PROBABILITIES:
+    - 0.25
+    - 0.5
+    - 0.25
+    EVIDENCE_RANDOM_MIX: 0.1
+    EVIDENCE_SOURCES: []
+    EVIDENCE_TEMPERATURE: 0.5
+    HYBRID_FALLBACK_TYPES:
+    - lag_break
+    - neighbor_break
+    - relation_flip
+    - local_function_shift
+    SCOPE_AWARE_NEGATIVE_ENABLE: true
+    SEED_SELECTION: mechanism_aware
+    SEGMENT_LENGTH_POLICY: event_scale_balanced
+    TYPES:
+    - lag_break
+    - neighbor_break
+    - relation_flip
+    - local_function_shift
+  TEMPORAL_CONSENSUS:
+    CAUSAL: true
+    DATASET_SPECIFIC_BRANCH: false
+    ENABLE: true
+    FORMULA: max(gated, causal_mean_10)
+    WIDTH: 10
+  TOKEN_BRIDGE:
+    EPS: 1.0e-05
+    INIT: normal_only_streaming_pca
+    JOINT_TRAINING: false
+    NAME: DifferentiableTokenBridge
+    SOURCE_DIM: 128
+  UNIFIED:
+    AUXILIARY_METRICS:
+    - PA_F1
+    BACKEND: OWLEYE
+    DATASET_SPECIFIC_SCORE_BRANCHES: false
+    EXPERIMENT_ID: GFM4MTSAD
+    FRONTEND_CHECKPOINT: ''
+    FRONTEND_SHA256: ''
+    MODULES:
+    - sensor_graph_encoder
+    - universal_gfm_adapter
+    - normal_referenced_node_to_time
+    PRIMARY_METRICS:
+    - AUROC
+    - AUPRC
+    - raw_F1
+    RUN_MODE: primary
+    TARGET_LABELS_USED_FOR_TRAINING: false
+SOLVER:
+  BASE_LR: 0.001
+  WEIGHT_DECAY: 0.001
+TIMESNET:
+  LOSS_NAMES:
+  - Recon
+  METRIC_NAMES:
+  - Recon
+  c_out: 55
+  enc_in: 55
+TRAIN:
+  CHECKPOINT_DIR: outputs
+  METRIC_BEST: .inf
+TRANSFORM:
+  AddBias:
+    bias_candidates:
+    - 0.5
+    - 0.4
+    - 0.3
+    - 0.2
+    - 0.1
+    - -0.1
+    - -0.2
+    - -0.3
+    - -0.4
+    - -0.5

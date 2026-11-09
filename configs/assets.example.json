@@ -1,0 +1,7 @@
+{
+  "data_dir": "../data",
+  "anomalygfm_checkpoint": "../assets/anomalygfm/model_weights_abnormal300.pth",
+  "anomalygfm_source": "../assets/anomalygfm/model.py",
+  "owleye_source": "../assets/owleye/model.py",
+  "owleye_checkpoint": "../assets/owleye/owleye_zero_shot_best.pt"
+}

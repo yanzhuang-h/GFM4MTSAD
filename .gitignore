@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.runtime/
+outputs/
+assets/
+configs/assets.local.json
+data/*
+!data/README.md
+*.pth
+*.pt
+*.npy
+*.npz
+*.pkl
+*.log

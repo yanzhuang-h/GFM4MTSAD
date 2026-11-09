@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "scope": "Main-training recipes merged with config.py; paths, seed and stage settings are supplied by main.py.",
+  "sources": [
+    {
+      "entity": "MSL_P-15",
+      "backend": "anomalygfm",
+      "snapshot": "configs/registered/MSL_P-15_anomalygfm.yaml",
+      "sha256": "a30076b7748d4327efa6b09a83202903d6b51331f08ee8c6fc38a201326d430b"
+    },
+    {
+      "entity": "SMAP_T-3",
+      "backend": "anomalygfm",
+      "snapshot": "configs/registered/SMAP_T-3_anomalygfm.yaml",
+      "sha256": "a35a8e88b7b530dadd185a9561fdc4094ef8e9e33e128f01c077ed704b631f14"
+    },
+    {
+      "entity": "SMD_1-1",
+      "backend": "anomalygfm",
+      "snapshot": "configs/registered/SMD_1-1_anomalygfm.yaml",
+      "sha256": "2835800ec11d37a66a6ea1ce0281e21efe4b1dbf6aa729bd36905ae4905bb838"
+    },
+    {
+      "entity": "MSL_P-15",
+      "backend": "owleye",
+      "snapshot": "configs/registered/MSL_P-15_owleye.yaml",
+      "sha256": "1c269c46724de02259f1e0568d6bc5d0d30bec80dd4890958d978f9eff0c6000"
+    },
+    {
+      "entity": "SMAP_T-3",
+      "backend": "owleye",
+      "snapshot": "configs/registered/SMAP_T-3_owleye.yaml",
+      "sha256": "c0c67b14ca1d90e4e1edc1d3801c1bf4ddffa6d07f87eb50fe94587c91bc5b8a"
+    },
+    {
+      "entity": "SMD_1-1",
+      "backend": "owleye",
+      "snapshot": "configs/registered/SMD_1-1_owleye.yaml",
+      "sha256": "dfbdf70da3a9c1f0e6ad2ab0f6b1891887d93c3de9f8cad526a35093437dbca4"
+    }
+  ]
+}

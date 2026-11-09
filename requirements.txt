@@ -1,0 +1,3 @@
+# Validated Linux/Python 3.10 environment. Install the matching CUDA wheel first
+# or provide an offline wheelhouse; see README.md.
+-r requirements/locked-replay-linux.txt
