@@ -41,6 +41,17 @@ class ConfigCompatibilityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Ambiguous config'):
             normalize_legacy_config(CfgNode({'SHARK': {}, 'GFM4MTSAD': {}}))
 
+    def test_archived_training_routes_fail_explicitly(self):
+        from config import get_cfg_defaults
+        from training.config_merge import require_main_recipe
+        cfg = get_cfg_defaults()
+        cfg.GFM4MTSAD.SYNTHETIC.CANDIDATE_GENERATOR = 'graph_var'
+        cfg.GFM4MTSAD.SYNTHETIC.NEGATIVE_SCREENING_MODE = 'legacy_boundary'
+        require_main_recipe(cfg)
+        cfg.GFM4MTSAD.OTRCL.ENABLE = True
+        with self.assertRaisesRegex(ValueError, 'not part of the released main recipe'):
+            require_main_recipe(cfg)
+
 
 @unittest.skipUnless(importlib.util.find_spec('torch'), 'requires training dependencies')
 class ReferenceCompatibilityTest(unittest.TestCase):

@@ -2,10 +2,10 @@ from pathlib import Path
 
 import torch
 
-from models.gfm4mtsad.modeling_high_dim_gfm_entry import HighDimGFMEntryGFM4MTSAD
+from models.gfm4mtsad.modeling_gfm4mtsad import GFM4MTSAD
 
 
-class AnchoredMILScaleGFM4MTSAD(HighDimGFMEntryGFM4MTSAD):
+class AnchoredMILScaleGFM4MTSAD(GFM4MTSAD):
     """High-dimensional entry with a fixed pre-adaptation MIL scale."""
 
     def __init__(self, cfg):
@@ -21,45 +21,6 @@ class AnchoredMILScaleGFM4MTSAD(HighDimGFMEntryGFM4MTSAD):
         )
         self._last_mil_scale_action = "uninitialized"
 
-    def load_frozen_v815_checkpoint(self, checkpoint_path):
-        checkpoint_path = Path(checkpoint_path)
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(
-                f"Frozen v8.15 checkpoint not found: {checkpoint_path}"
-            )
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
-        message = self.load_state_dict(checkpoint["model_state"], strict=False)
-        expected_missing = {
-            "gfm.high_dim_entry.weight",
-            "mil_scale_anchor",
-            "mil_scale_anchor_fitted",
-        }
-        if set(message.missing_keys) != expected_missing:
-            raise RuntimeError(
-                "Frozen v8.15 checkpoint has unexpected missing keys: "
-                f"{message.missing_keys}"
-            )
-        if message.unexpected_keys:
-            raise RuntimeError(
-                "Frozen v8.15 checkpoint has unexpected keys: "
-                f"{message.unexpected_keys}"
-            )
-        if int(torch.count_nonzero(self.gfm.high_dim_entry.weight)) != 0:
-            raise RuntimeError("High-dimensional entry must remain zero at load")
-        if bool(self.mil_scale_anchor_fitted):
-            raise RuntimeError("MIL scale anchor must be empty at baseline load")
-
-        self._frozen_v815_loaded = True
-        self._frozen_v815_checkpoint = str(checkpoint_path.resolve())
-        if hasattr(self.gfm_adapter, "fitted"):
-            self.gfm_adapter.fitted = True
-        self.freeze_for_high_dim_entry_tuning()
-        return {
-            "checkpoint": self._frozen_v815_checkpoint,
-            "checkpoint_epoch_index": int(checkpoint.get("epoch", -1)),
-            "missing_keys": sorted(message.missing_keys),
-            "unexpected_keys": sorted(message.unexpected_keys),
-        }
 
     @torch.no_grad()
     def fit_evidence_calibrator(self, loader, max_batches=None):

@@ -1,0 +1,37 @@
+Modified MIT License (Non-Commercial with Permission)
+
+Copyright (c) 2026 GFM4MTSAD contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, except as restricted below, and to permit persons
+to whom the Software is furnished to do so, subject to the following conditions:
+
+1. Non-Commercial Use Only
+   This software may not be used for commercial purposes without prior
+   written permission from the copyright holders.
+
+2. Commercial Use Permission
+   Commercial use requires explicit written permission from the relevant
+   copyright holders. Contact the maintainers through
+   https://github.com/yanzhuang-h/GFM4MTSAD to request permission for original
+   GFM4MTSAD contributions. This does not grant permission on behalf of any
+   third-party copyright holder.
+
+3. Retention of Notices
+   The above copyright notice and this permission notice shall be included
+   in all copies or substantial portions of the Software. Third-party code
+   retains its original copyrights and license terms; see licenses/NOTICE
+   and the accompanying license files. This license does not replace those
+   terms or grant rights to separately obtained datasets or model weights.
+
+4. Warranty Disclaimer
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+   THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.

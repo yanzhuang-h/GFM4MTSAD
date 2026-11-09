@@ -11,30 +11,15 @@ from models.gfm4mtsad.augment import GFM4MTSADAugmentor
 from models.gfm4mtsad.losses import (
     batch_hard_normal_contrastive_loss,
     carots_style_contrastive_loss,
-    decoupled_local_global_contrastive_loss,
     head_fidelity_loss,
     intervention_gain_node_loss,
     hard_normal_tail_ranking_loss,
     masked_node_consistency_loss,
-    mechanism_conditioned_local_global_contrastive_loss,
-    mechanism_matched_relation_contrastive_loss,
     node_aware_hard_contrastive_loss,
-    native_evidence_mechanism_contrastive_loss,
     ranking_loss,
-    tail_preserving_mechanism_window_contrastive_loss,
-    temporal_regime_contrastive_loss,
     window_bce_loss,
 )
-from models.gfm4mtsad.gfm_backend import require_node_anomaly_evidence
 from models.gfm4mtsad.relation_residual import RELATION_PATH_PARAMETER_PREFIXES
-from models.gfm4mtsad.relational_contrast import relational_node_contrastive_loss
-from models.gfm4mtsad.otrcl_integrity import (
-    gradient_clip_diagnostics,
-    summarize_otrcl_view_integrity,
-)
-from models.gfm4mtsad.temporal_counterfactual import (
-    TemporalCounterfactualGenerator,
-)
 from utils.misc import mkdir
 
 
@@ -48,19 +33,10 @@ class GFM4MTSADTrainer(Trainer):
             getattr(self.otrcl_settings, "ENABLE", False)
         )
         self.temporal_counterfactual = (
-            TemporalCounterfactualGenerator.from_config(cfg)
-            if self.otrcl_enabled
-            else None
+            None
         )
         self.last_otrcl_diagnostics = {}
         self.last_otrcl_gradient_diagnostics = {}
-        if self.otrcl_enabled and not hasattr(
-            self.model,
-            "temporal_regime_encoder",
-        ):
-            raise ValueError(
-                "GFM4MTSAD.OTRCL.ENABLE requires OTRCLUnifiedGFM4MTSAD"
-            )
         if self.augmentor.requires_normal_mechanism:
             print(
                 f"[GFM4MTSAD setup] dataset={cfg.DATA.NAME} fitting normal mechanism",
@@ -69,21 +45,6 @@ class GFM4MTSADTrainer(Trainer):
             self.augmentor.fit_normal_mechanism(self.train_loader)
             self.model._gfm4mtsad_normal_mechanism = self.augmentor.normal_mechanism
             self._print_normal_mechanism_diagnostics()
-        if self.augmentor.requires_frozen_gfm_teacher:
-            if self.negative_teacher is None:
-                raise ValueError(
-                    "frozen_gfm_teacher screening requires a separate teacher"
-                )
-            teacher_diagnostics = self.augmentor.bind_frozen_gfm_teacher(
-                self.negative_teacher
-            )
-            print(
-                "[GFM4MTSAD frozen teacher selector] "
-                f"bound={teacher_diagnostics.get('bound', False)} "
-                f"valid_nodes={teacher_diagnostics.get('valid_node_count', 0)} "
-                "teacher_trainable=False",
-                flush=True,
-            )
         print(f"[GFM4MTSAD setup] dataset={cfg.DATA.NAME} fitting Sensor-to-GFM Adapter", flush=True)
         self.model.fit_feature_adapter(
             self.train_loader,
@@ -116,25 +77,6 @@ class GFM4MTSADTrainer(Trainer):
                 f"blend={graph_reference.get('reference_prior_blend', 0.0):.3f}",
                 flush=True,
             )
-        if self.augmentor.requires_frontend_graph_selector:
-            print(
-                f"[GFM4MTSAD setup] dataset={cfg.DATA.NAME} fitting train-normal "
-                "frontend-effective selector scale",
-                flush=True,
-            )
-            selector = self.augmentor.fit_frontend_graph_selector(
-                self.model.imlp,
-                self.model.graph_builder,
-                self.train_loader,
-            )
-            print(
-                "[GFM4MTSAD v2.2 selector] "
-                f"fitted={selector.get('fitted', False)} "
-                f"windows={selector.get('fit_windows', 0)} "
-                f"valid_nodes={selector.get('valid_node_count', 0)} "
-                f"scale_floor={selector.get('scale_floor', 0.0):.6g}",
-                flush=True,
-            )
         print(f"[GFM4MTSAD setup] dataset={cfg.DATA.NAME} fitting normal reference", flush=True)
         self.model.fit_evidence_calibrator(
             self.train_loader,
@@ -144,122 +86,6 @@ class GFM4MTSADTrainer(Trainer):
         print(f"[GFM4MTSAD setup] dataset={cfg.DATA.NAME} ready", flush=True)
         self._print_peft_diagnostics()
 
-    @torch.no_grad()
-    def _apply_frozen_teacher_selection(
-        self,
-        windows,
-        adjacency,
-        anomaly_type_ids,
-    ):
-        selector = self.augmentor.frozen_gfm_teacher_selector
-        if selector is None:
-            raise RuntimeError("Frozen GFM teacher selector is not bound")
-        selected = selector.select_batch(
-            windows,
-            self.augmentor.last_candidate_records,
-        )
-        batch_size, _, node_count = windows.shape
-        negative = windows.clone()
-        direct_mask = windows.new_zeros(batch_size, node_count)
-        propagated_mask = windows.new_zeros(batch_size, node_count)
-        valid_mask = torch.zeros(
-            batch_size,
-            device=windows.device,
-            dtype=torch.bool,
-        )
-        sample_weights = windows.new_zeros(batch_size)
-        acceptance_tier = torch.full(
-            (batch_size,),
-            self.augmentor.ACCEPTANCE_INVALID,
-            device=windows.device,
-            dtype=torch.long,
-        )
-        rms_rescue_mask = torch.zeros_like(valid_mask)
-        delta_rms = windows.new_zeros(batch_size)
-        seed_ids = torch.full(
-            (batch_size,),
-            -1,
-            device=windows.device,
-            dtype=torch.long,
-        )
-        direct_type_ids = torch.full_like(seed_ids, -1)
-        consistency_exclusion = torch.zeros(
-            batch_size,
-            node_count,
-            device=windows.device,
-            dtype=torch.bool,
-        )
-        type_to_id = {
-            name: index
-            for index, name in enumerate(self.augmentor.synthetic_types)
-        }
-        for batch_index, record in selected.items():
-            seed = int(record["seed"])
-            start = int(record["start"])
-            end = int(record["end"])
-            anomaly_type = str(record["anomaly_type"])
-            values = record["values"].to(
-                device=windows.device,
-                dtype=windows.dtype,
-            )
-            negative[batch_index, start:end, seed] = values
-            direct_mask[batch_index, seed] = 1.0
-            valid_mask[batch_index] = True
-            sample_weights[batch_index] = float(record["sample_weight"])
-            acceptance_tier[batch_index] = int(record["acceptance_tier"])
-            rms_rescue_mask[batch_index] = bool(
-                record["rms_rescue_eligible"]
-            )
-            delta_rms[batch_index] = float(record["perturbation_rms"])
-            seed_ids[batch_index] = seed
-            type_id = type_to_id[anomaly_type]
-            direct_type_ids[batch_index] = type_id
-            anomaly_type_ids[batch_index] = type_id
-            if self.augmentor.normal_mechanism is not None:
-                consistency_exclusion[batch_index] = (
-                    self.augmentor.normal_mechanism.affected_context_mask(
-                        seed,
-                        windows.device,
-                    )
-                )
-            neighbors = self.augmentor._graph_neighbor_candidates(
-                adjacency[batch_index],
-                seed,
-                node_count,
-            )
-            propagated = self.augmentor._scope_aware_negative_propagation(
-                negative,
-                windows,
-                propagated_mask,
-                batch_index,
-                seed,
-                neighbors,
-                adjacency[batch_index, seed],
-                start,
-                end,
-                values,
-            )
-            if propagated.numel() > 0:
-                consistency_exclusion[batch_index, propagated] = True
-            elif self.augmentor.scope_aware_negative_enable:
-                sample_weights[batch_index] *= (
-                    self.augmentor.scope_aware_negative_singleton_weight
-                )
-        self.augmentor.last_valid_mask = valid_mask
-        self.augmentor.last_sample_weights = sample_weights
-        self.augmentor.last_acceptance_tier = acceptance_tier
-        self.augmentor.last_rms_rescue_mask = rms_rescue_mask
-        self.augmentor.last_selected_delta_rms = delta_rms
-        self.augmentor.last_seed_ids = seed_ids
-        self.augmentor.last_direct_type_ids = direct_type_ids
-        self.augmentor.last_edit_source_ids = torch.where(
-            valid_mask,
-            torch.full_like(seed_ids, self.augmentor.EDIT_SOURCE_DIRECT),
-            torch.full_like(seed_ids, self.augmentor.EDIT_SOURCE_INVALID),
-        )
-        self.augmentor.last_fallback_type_ids = torch.full_like(seed_ids, -1)
-        self.augmentor.last_consistency_exclusion_mask = consistency_exclusion
-        return negative, direct_mask, propagated_mask, anomaly_type_ids
 
     def create_optimizer(self):
         self.optimizer = optim.construct_optimizer(self.model, self.cfg)
@@ -856,40 +682,6 @@ class GFM4MTSADTrainer(Trainer):
             float((valid_counts > 0).double().mean()) if valid_counts is not None else 0.0
         )
         selector = self.augmentor.frontend_graph_effective_selector
-        if selector is not None:
-            selector_diagnostics = selector.running_diagnostics()
-            selector_proposals = torch.as_tensor(
-                selector_diagnostics["frontend_effective_proposal_counts"]
-            )
-            selector_selected = torch.as_tensor(
-                selector_diagnostics["frontend_effective_selected_counts"]
-            )
-            selector_valid = selector.valid_nodes.detach().bool().cpu()
-            proposal_coverage = float(
-                (selector_proposals[selector_valid] > 0).float().mean()
-            )
-            selected_coverage = float(
-                (selector_selected[selector_valid] > 0).float().mean()
-            )
-            print(
-                "[GFM4MTSAD frontend-effective selector epoch] "
-                f"dataset={self.cfg.DATA.NAME} epoch={self.cur_epoch + 1} "
-                f"candidates={totals['frontend_effective_candidate_count']} "
-                f"eligible={totals['frontend_effective_eligible_count']} "
-                f"eligible_ratio={totals['frontend_effective_eligible_count'] / max(totals['frontend_effective_candidate_count'], 1):.3f} "
-                f"below={totals['frontend_effective_below_count']} "
-                f"above={totals['frontend_effective_above_count']} "
-                f"graph_nonlocal={totals['frontend_effective_graph_nonlocal_count']} "
-                f"coverage_rescue={totals.get('frontend_effective_rescue_used_count', 0)} "
-                f"nonlegacy_pool={totals.get('frontend_primary_nonlegacy_pool_count', 0)} "
-                f"nonlegacy_eligible={totals.get('frontend_primary_nonlegacy_eligible_count', 0)} "
-                f"nonlegacy_selected={totals.get('frontend_primary_nonlegacy_selected_count', 0)} "
-                f"selected_D_fd={totals['frontend_effective_selected_d_fd_sum'] / max(totals['valid_count'], 1):.3f} "
-                f"selected_D_adj_nonincident={totals['frontend_effective_selected_graph_drift_sum'] / max(totals['valid_count'], 1):.4f} "
-                f"proposal_node_coverage={proposal_coverage:.3f} "
-                f"selected_node_coverage={selected_coverage:.3f}",
-                flush=True,
-            )
         fallback_types = ",".join(
             f"{name}:{count / attempted:.3f}"
             for name, count in sorted(totals["fallback_type_counts"].items())
@@ -1204,12 +996,6 @@ class GFM4MTSADTrainer(Trainer):
                 False,
             )
         )
-        if relation_residual_enabled:
-            parameter_groups["relation_path"] = [
-                parameter
-                for name, parameter in named_parameters
-                if name.startswith(RELATION_PATH_PARAMETER_PREFIXES)
-            ]
         local_global_enabled = bool(
             getattr(
                 getattr(self.cfg.GFM4MTSAD, "LOCAL_GLOBAL_CONTRAST", None),
@@ -1217,12 +1003,6 @@ class GFM4MTSADTrainer(Trainer):
                 False,
             )
         )
-        if local_global_enabled:
-            parameter_groups["local_global_path"] = [
-                parameter
-                for name, parameter in named_parameters
-                if name.startswith(RELATION_PATH_PARAMETER_PREFIXES)
-            ]
         decoupled_enabled = bool(
             getattr(
                 getattr(
@@ -1251,17 +1031,6 @@ class GFM4MTSADTrainer(Trainer):
                 False,
             )
         )
-        if native_evidence_contrast_enabled:
-            parameter_groups["native_evidence_backend"] = [
-                parameter
-                for name, parameter in named_parameters
-                if name.startswith("gfm.")
-            ]
-            parameter_groups["native_evidence_shared_path"] = [
-                parameter
-                for name, parameter in named_parameters
-                if name.startswith(RELATION_PATH_PARAMETER_PREFIXES)
-            ]
         tail_window_contrast_enabled = bool(
             getattr(
                 getattr(
@@ -1273,58 +1042,6 @@ class GFM4MTSADTrainer(Trainer):
                 False,
             )
         )
-        if tail_window_contrast_enabled:
-            window_risk_prefixes = RELATION_PATH_PARAMETER_PREFIXES + (
-                "gfm.",
-                "sensor_graph_prompt.",
-                "head.direct_node_head.",
-            )
-            parameter_groups["tail_window_risk_path"] = [
-                parameter
-                for name, parameter in named_parameters
-                if name.startswith(window_risk_prefixes)
-            ]
-        if self.otrcl_enabled:
-            if bool(self.otrcl_settings.TEMPORAL_ENABLE):
-                parameter_groups["otrcl_temporal_path"] = [
-                    parameter
-                    for name, parameter in named_parameters
-                    if name.startswith("temporal_regime_encoder.")
-                ]
-            if bool(self.otrcl_settings.RELATIONAL_ENABLE):
-                parameter_groups["otrcl_relation_path"] = [
-                    parameter
-                    for name, parameter in named_parameters
-                    if (
-                        name.startswith("gfm_adapter.")
-                        or name.startswith("sensor_graph_prompt.")
-                        or name.startswith("gfm.")
-                    )
-                ]
-            parameter_groups["otrcl_native_gfm_path"] = [
-                parameter
-                for name, parameter in named_parameters
-                if (
-                    name.startswith("gfm_adapter.")
-                    or name.startswith("sensor_graph_prompt.")
-                    or name.startswith("gfm.")
-                )
-            ]
-            parameter_groups["otrcl_ipra_path"] = [
-                parameter
-                for name, parameter in named_parameters
-                if name.startswith("information_residual.")
-            ]
-            parameter_groups["otrcl_direct_head_path"] = [
-                parameter
-                for name, parameter in named_parameters
-                if name.startswith("head.direct_node_head.")
-            ]
-            parameter_groups["otrcl_inference_shared_path"] = [
-                parameter
-                for name, parameter in named_parameters
-                if not name.startswith("temporal_regime_encoder.")
-            ]
         epoch_records = {}
         for group_name, parameters in parameter_groups.items():
             if not parameters:
@@ -1505,71 +1222,6 @@ class GFM4MTSADTrainer(Trainer):
     def gradient_audit_records(self):
         return dict(getattr(self, "_gradient_audit_records", {}))
 
-    def _record_local_global_contrast(self, result, training):
-        """累计局部—全局目标的运行证据，避免“能跑”等同于“已生效”。"""
-        stats = getattr(
-            self,
-            "_local_global_contrast_stats",
-            {
-                "calls": 0,
-                "training_calls": 0,
-                "active_calls": 0,
-                "training_active_calls": 0,
-                "sample_count": 0,
-                "training_sample_count": 0,
-                "direct_node_count": 0,
-                "unchanged_node_count": 0,
-                "training_direct_node_count": 0,
-                "training_unchanged_node_count": 0,
-                "weighted_global_gap_sum": 0.0,
-                "weighted_direct_gap_sum": 0.0,
-                "weighted_unchanged_drift_sum": 0.0,
-                "weighted_counterfactual_gap_sum": 0.0,
-            },
-        )
-        stats["calls"] += 1
-        if training:
-            stats["training_calls"] += 1
-        sample_count = int(result["sample_count"].detach().cpu())
-        direct_count = int(result["direct_node_count"].detach().cpu())
-        unchanged_count = int(result["unchanged_node_count"].detach().cpu())
-        if sample_count > 0:
-            stats["active_calls"] += 1
-            stats["sample_count"] += sample_count
-            stats["direct_node_count"] += direct_count
-            stats["unchanged_node_count"] += unchanged_count
-            if training:
-                stats["training_active_calls"] += 1
-                stats["training_sample_count"] += sample_count
-                stats["training_direct_node_count"] += direct_count
-                stats["training_unchanged_node_count"] += unchanged_count
-                for source, target in (
-                    ("global_gap", "weighted_global_gap_sum"),
-                    ("direct_gap", "weighted_direct_gap_sum"),
-                    ("unchanged_drift", "weighted_unchanged_drift_sum"),
-                    ("counterfactual_gap", "weighted_counterfactual_gap_sum"),
-                ):
-                    stats[target] += (
-                        float(result[source].detach().cpu()) * sample_count
-                    )
-        self._local_global_contrast_stats = stats
-
-        if training and int(getattr(self, "cur_iter", -1)) in (0, 1):
-            settings = self.cfg.GFM4MTSAD.LOCAL_GLOBAL_CONTRAST
-            print(
-                "[GFM4MTSAD local-global contrast] "
-                f"dataset={self.cfg.DATA.NAME} "
-                f"arm={settings.EXPERIMENT_ARM} "
-                f"valid_samples={sample_count} direct_nodes={direct_count} "
-                f"unchanged_nodes={unchanged_count} "
-                f"global_gap={float(result['global_gap'].detach().cpu()):.6f} "
-                f"direct_gap={float(result['direct_gap'].detach().cpu()):.6f} "
-                "unchanged_drift="
-                f"{float(result['unchanged_drift'].detach().cpu()):.6f} "
-                "combined_gap="
-                f"{float(result['counterfactual_gap'].detach().cpu()):.6f}",
-                flush=True,
-            )
 
     def local_global_contrast_diagnostics(self):
         """返回可写入 smoke/primary 审计文件的累计诊断。"""
@@ -1626,98 +1278,6 @@ class GFM4MTSADTrainer(Trainer):
             ),
         }
 
-    def _record_decoupled_local_global_contrast(self, result, training):
-        """累计解耦全局/局部分量，供 Smoke 判断分支是否真正激活。"""
-        stats = getattr(
-            self,
-            "_decoupled_local_global_contrast_stats",
-            {
-                "calls": 0,
-                "training_calls": 0,
-                "active_calls": 0,
-                "training_active_calls": 0,
-                "sample_count": 0,
-                "training_sample_count": 0,
-                "local_sample_count": 0,
-                "training_local_sample_count": 0,
-                "direct_node_count": 0,
-                "training_direct_node_count": 0,
-                "global_weight_sum": 0.0,
-                "training_global_weight_sum": 0.0,
-                "local_weight_sum": 0.0,
-                "training_local_weight_sum": 0.0,
-                "weighted_global_loss_sum": 0.0,
-                "weighted_local_loss_sum": 0.0,
-                "weighted_local_contribution_sum": 0.0,
-                "weighted_global_gap_sum": 0.0,
-                "weighted_direct_gap_sum": 0.0,
-                "local_gap_measured": False,
-            },
-        )
-        stats["calls"] += 1
-        if training:
-            stats["training_calls"] += 1
-        sample_count = int(result["sample_count"].detach().cpu())
-        local_sample_count = int(
-            result["local_sample_count"].detach().cpu()
-        )
-        direct_node_count = int(result["direct_node_count"].detach().cpu())
-        global_weight_sum = float(result["global_weight_sum"].detach().cpu())
-        local_weight_sum = float(result["local_weight_sum"].detach().cpu())
-        local_measured = bool(result.get("local_measured", False))
-        if sample_count > 0:
-            stats["active_calls"] += 1
-            stats["sample_count"] += sample_count
-            stats["local_sample_count"] += local_sample_count
-            stats["direct_node_count"] += direct_node_count
-            stats["global_weight_sum"] += global_weight_sum
-            stats["local_weight_sum"] += local_weight_sum
-            if training:
-                stats["training_active_calls"] += 1
-                stats["training_sample_count"] += sample_count
-                stats["training_local_sample_count"] += local_sample_count
-                stats["training_direct_node_count"] += direct_node_count
-                stats["training_global_weight_sum"] += global_weight_sum
-                stats["training_local_weight_sum"] += local_weight_sum
-                stats["weighted_global_loss_sum"] += (
-                    float(result["global"].detach().cpu()) * global_weight_sum
-                )
-                stats["weighted_global_gap_sum"] += (
-                    float(result["global_gap"].detach().cpu()) * global_weight_sum
-                )
-                if local_measured and local_weight_sum > 0.0:
-                    stats["local_gap_measured"] = True
-                    stats["weighted_local_loss_sum"] += (
-                        float(result["local"].detach().cpu())
-                        * local_weight_sum
-                    )
-                    stats["weighted_local_contribution_sum"] += (
-                        float(result["weighted_local"].detach().cpu())
-                        * local_weight_sum
-                    )
-                    stats["weighted_direct_gap_sum"] += (
-                        float(result["direct_gap"].detach().cpu())
-                        * local_weight_sum
-                    )
-        self._decoupled_local_global_contrast_stats = stats
-
-        if training and int(getattr(self, "cur_iter", -1)) in (0, 1):
-            settings = self.cfg.GFM4MTSAD.DECOUPLED_LOCAL_GLOBAL_CONTRAST
-            print(
-                "[GFM4MTSAD 解耦局部-全局对比] "
-                f"dataset={self.cfg.DATA.NAME} "
-                f"arm={settings.EXPERIMENT_ARM} "
-                f"valid_samples={sample_count} "
-                f"local_samples={local_sample_count} "
-                f"direct_nodes={direct_node_count} "
-                f"global_loss={float(result['global'].detach().cpu()):.6f} "
-                f"local_loss={float(result['local'].detach().cpu()):.6f} "
-                "weighted_local="
-                f"{float(result['weighted_local'].detach().cpu()):.6f} "
-                f"global_gap={float(result['global_gap'].detach().cpu()):.6f} "
-                f"direct_gap={float(result['direct_gap'].detach().cpu()):.6f}",
-                flush=True,
-            )
 
     def decoupled_local_global_contrast_diagnostics(self):
         """返回解耦目标的累计损失、间隔和有效监督数量。"""
@@ -1827,72 +1387,6 @@ class GFM4MTSADTrainer(Trainer):
             "local_measured": False,
         }
 
-    def _record_native_evidence_mechanism_contrast(self, result, training):
-        """累计后端通用节点异常证据对比的损失和证据方向。"""
-        stats = getattr(
-            self,
-            "_native_evidence_mechanism_contrast_stats",
-            self._native_evidence_contrast_stat_defaults(),
-        )
-        stats["calls"] += 1
-        if training:
-            stats["training_calls"] += 1
-        sample_count = int(result["sample_count"].detach().cpu())
-        local_sample_count = int(
-            result["local_sample_count"].detach().cpu()
-        )
-        direct_node_count = int(result["direct_node_count"].detach().cpu())
-        global_weight_sum = float(result["global_weight_sum"].detach().cpu())
-        local_weight_sum = float(result["local_weight_sum"].detach().cpu())
-        local_measured = bool(result.get("local_measured", False))
-        stats["sample_count"] += sample_count
-        stats["local_sample_count"] += local_sample_count
-        stats["direct_node_count"] += direct_node_count
-        if training and sample_count > 0:
-            stats["training_active_calls"] += 1
-            stats["training_sample_count"] += sample_count
-            stats["training_local_sample_count"] += local_sample_count
-            stats["training_direct_node_count"] += direct_node_count
-            stats["training_global_weight_sum"] += global_weight_sum
-            stats["weighted_global_loss_sum"] += (
-                float(result["global"].detach().cpu()) * global_weight_sum
-            )
-            stats["weighted_global_gap_sum"] += (
-                float(result["global_gap"].detach().cpu()) * global_weight_sum
-            )
-            if local_measured and local_weight_sum > 0.0:
-                stats["local_measured"] = True
-                stats["training_local_weight_sum"] += local_weight_sum
-                for source, target in (
-                    ("local", "weighted_local_loss_sum"),
-                    ("weighted_local", "weighted_local_contribution_sum"),
-                    ("local_pair", "weighted_pair_loss_sum"),
-                    ("pair_gap", "weighted_pair_gap_sum"),
-                    ("reference_evidence", "weighted_reference_evidence_sum"),
-                    ("negative_evidence", "weighted_negative_evidence_sum"),
-                    ("pair_satisfaction", "weighted_pair_satisfaction_sum"),
-                ):
-                    stats[target] += (
-                        float(result[source].detach().cpu())
-                        * local_weight_sum
-                    )
-        self._native_evidence_mechanism_contrast_stats = stats
-
-        if training and int(getattr(self, "cur_iter", -1)) in (0, 1):
-            settings = self.cfg.GFM4MTSAD.NATIVE_EVIDENCE_MECHANISM_CONTRAST
-            print(
-                "[GFM4MTSAD 原生证据机制对比] "
-                f"dataset={self.cfg.DATA.NAME} arm={settings.EXPERIMENT_ARM} "
-                f"valid_samples={sample_count} local_samples={local_sample_count} "
-                f"direct_nodes={direct_node_count} "
-                f"pair_gap={float(result['pair_gap'].detach().cpu()):.6f} "
-                "reference_evidence="
-                f"{float(result['reference_evidence'].detach().cpu()):.6f} "
-                "negative_evidence="
-                f"{float(result['negative_evidence'].detach().cpu()):.6f} "
-                f"local_loss={float(result['local'].detach().cpu()):.6f}",
-                flush=True,
-            )
 
     def native_evidence_mechanism_contrast_diagnostics(self):
         stats = dict(
@@ -1992,71 +1486,6 @@ class GFM4MTSADTrainer(Trainer):
             "tail_measured": False,
         }
 
-    def _record_tail_preserving_window_contrast(self, result, training):
-        """累计窗口机制间隔与正常尾部压缩的运行证据。"""
-        stats = getattr(
-            self,
-            "_tail_preserving_window_contrast_stats",
-            self._tail_window_contrast_stat_defaults(),
-        )
-        stats["calls"] += 1
-        if training:
-            stats["training_calls"] += 1
-        sample_count = int(result["sample_count"].detach().cpu())
-        hard_tail_count = int(result["hard_tail_count"].detach().cpu())
-        weight_sum = float(result["weight_sum"].detach().cpu())
-        if training and sample_count > 0 and weight_sum > 0.0:
-            stats["training_active_calls"] += 1
-            stats["training_sample_count"] += sample_count
-            stats["training_hard_tail_count"] += hard_tail_count
-            stats["training_weight_sum"] += weight_sum
-            for source, target in (
-                ("global", "weighted_global_loss_sum"),
-                ("window", "weighted_window_loss_sum"),
-                ("weighted_window", "weighted_window_contribution_sum"),
-                ("tail", "weighted_tail_loss_sum"),
-                ("weighted_tail", "weighted_tail_contribution_sum"),
-                ("global_gap", "weighted_global_gap_sum"),
-                ("normal_variation", "weighted_normal_variation_sum"),
-                ("normal_reference", "weighted_normal_reference_sum"),
-                ("negative_risk", "weighted_negative_risk_sum"),
-                ("mechanism_gain", "weighted_mechanism_gain_sum"),
-                ("required_gain", "weighted_required_gain_sum"),
-                ("window_pair_gap", "weighted_window_pair_gap_sum"),
-                ("pair_satisfaction", "weighted_pair_satisfaction_sum"),
-                ("normal_center_reference", "weighted_normal_center_sum"),
-                (
-                    "hard_normal_tail_reference",
-                    "weighted_hard_tail_reference_sum",
-                ),
-                ("hard_normal_tail_mean", "weighted_hard_tail_mean_sum"),
-                ("tail_excess_mean", "weighted_tail_excess_sum"),
-                ("tail_violation_rate", "weighted_tail_violation_sum"),
-            ):
-                stats[target] += float(result[source].detach().cpu()) * weight_sum
-            stats["window_measured"] = bool(
-                stats["window_measured"] or result["window_measured"]
-            )
-            stats["tail_measured"] = bool(
-                stats["tail_measured"] or result["tail_measured"]
-            )
-        self._tail_preserving_window_contrast_stats = stats
-
-        if training and int(getattr(self, "cur_iter", -1)) in (0, 1):
-            settings = self.cfg.GFM4MTSAD.TAIL_PRESERVING_WINDOW_CONTRAST
-            print(
-                "[GFM4MTSAD 尾部保持窗口机制对比] "
-                f"dataset={self.cfg.DATA.NAME} arm={settings.EXPERIMENT_ARM} "
-                f"valid_samples={sample_count} hard_tail={hard_tail_count} "
-                "normal_variation="
-                f"{float(result['normal_variation'].detach().cpu()):.6f} "
-                f"mechanism_gain={float(result['mechanism_gain'].detach().cpu()):.6f} "
-                f"window_pair_gap={float(result['window_pair_gap'].detach().cpu()):.6f} "
-                f"tail_excess={float(result['tail_excess_mean'].detach().cpu()):.6f} "
-                "tail_violation_rate="
-                f"{float(result['tail_violation_rate'].detach().cpu()):.6f}",
-                flush=True,
-            )
 
     def tail_preserving_window_contrast_diagnostics(self):
         stats = dict(
@@ -2297,21 +1726,8 @@ class GFM4MTSADTrainer(Trainer):
             ),
         }
 
-    @torch.no_grad()
-    def _otrcl_graph_evaluator(self, windows):
-        if not hasattr(self.model.imlp, "forward_components"):
-            raise RuntimeError(
-                "OTR-CL graph orthogonality requires explicit DLinear components"
-            )
-        seasonal, trend = self.model.imlp.forward_components(windows.float())
-        return self.model.graph_builder((seasonal + trend).detach())
 
-    def _otrcl_model_forward(self, windows, **kwargs):
-        if self.otrcl_enabled:
-            kwargs["compute_otrcl"] = bool(
-                getattr(self.otrcl_settings, "TEMPORAL_ENABLE", False)
-                or getattr(self.otrcl_settings, "RELATIONAL_ENABLE", False)
-            )
+    def _model_forward(self, windows, **kwargs):
         return self.model(windows, **kwargs)
 
     def _forward_loss(self, windows):
@@ -2336,10 +1752,6 @@ class GFM4MTSADTrainer(Trainer):
         joint_bridge_training = bool(
             getattr(token_bridge, "JOINT_TRAINING", False)
         )
-        if self.otrcl_enabled and joint_bridge_training:
-            raise ValueError(
-                "OTR-CL v1 does not combine with joint Token Bridge retention"
-            )
         can_reuse_frozen_anchor = (
             frozen_frontend is not None
             and hasattr(self.model, "forward_from_frozen_frontend")
@@ -2351,12 +1763,12 @@ class GFM4MTSADTrainer(Trainer):
                 frozen_frontend
             )
         elif joint_bridge_training:
-            outputs_anchor = self._otrcl_model_forward(
+            outputs_anchor = self._model_forward(
                 windows,
                 compute_bridge_retention=True,
             )
         else:
-            outputs_anchor = self._otrcl_model_forward(windows)
+            outputs_anchor = self._model_forward(windows)
         node_evidence = self._build_counterfactual_node_evidence(outputs_anchor, base_adjacency)
         progress = self._training_progress()
         collect_diagnostics = (
@@ -2403,13 +1815,6 @@ class GFM4MTSADTrainer(Trainer):
         tail_window_contrast_enabled = bool(
             getattr(tail_window_contrast_settings, "ENABLE", False)
         )
-        if native_evidence_contrast_enabled:
-            backend = getattr(self.model, "gfm", None)
-            if backend is None or not hasattr(backend, "backend_spec"):
-                raise ValueError(
-                    "原生证据机制对比要求模型暴露 GFM backend_spec"
-                )
-            require_node_anomaly_evidence(backend.backend_spec())
         active_contrast_candidates = [
             name
             for name, enabled in (
@@ -2436,84 +1841,26 @@ class GFM4MTSADTrainer(Trainer):
                 "局部对比候选必须保持单因素互斥，当前同时启用: "
                 + ", ".join(active_contrast_candidates)
             )
-        if decoupled_local_global_enabled and (
-            relation_residual_enabled or local_global_enabled
-        ):
-            active = []
-            if relation_residual_enabled:
-                active.append("RELATION_RESIDUAL_CONTRAST")
-            if local_global_enabled:
-                active.append("LOCAL_GLOBAL_CONTRAST")
-            raise ValueError(
-                "解耦局部—全局对比是隔离单因素实验，不能同时启用: "
-                + ", ".join(active)
-            )
-        if relation_residual_enabled and local_global_enabled:
-            raise ValueError(
-                "关系残差对比与局部—全局反事实对比是互斥的单因素候选"
-            )
         temporal_views = None
         negative_schedule = self.augmentor.next_coverage_balanced_schedule(
             windows.size(0)
         )
         selector_reference = (
-            None
-            if self.augmentor.requires_frozen_gfm_teacher
-            else base_node_features
+            base_node_features
         )
-        if self.otrcl_enabled:
-            temporal_views = self.temporal_counterfactual(
-                windows,
-                graph_evaluator=self._otrcl_graph_evaluator,
-            )
-            positive_view = temporal_views["positive_view"]
-            negative_view, direct_node_mask, propagated_node_mask, anomaly_type_ids = self.augmentor.relation_function_breaking_view(
-                windows,
-                base_adjacency,
-                node_evidence=node_evidence,
-                progress=progress,
-                collect_diagnostics=collect_diagnostics,
-                orthogonality_reference_view=temporal_views[
-                    "coarse_view"
-                ],
-                frontend_reference=selector_reference,
-                **negative_schedule,
-            )
-        elif relation_residual_enabled:
-            positive_view, negative_view, direct_node_mask, propagated_node_mask, anomaly_type_ids = (
-                self.augmentor.mechanism_matched_views(
-                    windows,
-                    base_adjacency,
-                    node_evidence=node_evidence,
-                    progress=progress,
-                    collect_diagnostics=collect_diagnostics,
-                )
-            )
-        else:
-            positive_view = self.augmentor.relation_preserving_view(
-                windows,
-                base_adjacency,
-            )
-            negative_view, direct_node_mask, propagated_node_mask, anomaly_type_ids = self.augmentor.relation_function_breaking_view(
-                windows,
-                base_adjacency,
-                node_evidence=node_evidence,
-                progress=progress,
-                collect_diagnostics=collect_diagnostics,
-                frontend_reference=selector_reference,
-                **negative_schedule,
-            )
-        if self.augmentor.requires_frozen_gfm_teacher:
-            (
-                negative_view,
-                direct_node_mask,
-                propagated_node_mask,
-                anomaly_type_ids,
-            ) = self._apply_frozen_teacher_selection(
-                windows,
-                base_adjacency,
-                anomaly_type_ids,
-            )
+        positive_view = self.augmentor.relation_preserving_view(
+            windows,
+            base_adjacency,
+        )
+        negative_view, direct_node_mask, propagated_node_mask, anomaly_type_ids = self.augmentor.relation_function_breaking_view(
+            windows,
+            base_adjacency,
+            node_evidence=node_evidence,
+            progress=progress,
+            collect_diagnostics=collect_diagnostics,
+            frontend_reference=selector_reference,
+            **negative_schedule,
+        )
         valid_negative_mask = getattr(self.augmentor, "last_valid_mask", None)
         if valid_negative_mask is None:
             valid_negative_mask = torch.ones(
@@ -2540,10 +1887,6 @@ class GFM4MTSADTrainer(Trainer):
             raise ValueError("Counterfactual sample weights must be finite and non-negative")
         valid_negative_mask = valid_negative_mask & (sample_weights > 0)
         fine_valid_mask = valid_negative_mask.clone()
-        if temporal_views is not None:
-            valid_negative_mask = valid_negative_mask & temporal_views[
-                "positive_valid_mask"
-            ].bool()
         valid_sample_weights = sample_weights[valid_negative_mask]
         consistency_exclusion_mask = getattr(
             self.augmentor,
@@ -2564,68 +1907,12 @@ class GFM4MTSADTrainer(Trainer):
                     f"direct={tuple(direct_node_mask.shape)}"
                 )
 
-        outputs_positive = self._otrcl_model_forward(positive_view)
-        outputs_negative = self._otrcl_model_forward(negative_view)
+        outputs_positive = self._model_forward(positive_view)
+        outputs_negative = self._model_forward(negative_view)
         outputs_coarse = (
-            self._otrcl_model_forward(temporal_views["coarse_view"])
-            if temporal_views is not None
-            else None
+            None
         )
         otrcl_integrity = None
-        if temporal_views is not None:
-            otrcl_integrity = summarize_otrcl_view_integrity(
-                anchor_windows=windows,
-                view_windows={
-                    "W+": positive_view,
-                    "Wc": temporal_views["coarse_view"],
-                    "Wf": negative_view,
-                },
-                anchor_outputs=outputs_anchor,
-                view_outputs={
-                    "W+": outputs_positive,
-                    "Wc": outputs_coarse,
-                    "Wf": outputs_negative,
-                },
-                valid_masks={
-                    "W+": temporal_views["positive_valid_mask"],
-                    "Wc": temporal_views["coarse_valid_mask"],
-                    "Wf": fine_valid_mask,
-                },
-                direct_node_mask=direct_node_mask,
-                propagated_node_mask=propagated_node_mask,
-                consistency_exclusion_mask=consistency_exclusion_mask,
-                eps=float(self.otrcl_settings.ORTHOGONALITY_EPS),
-            )
-            positive_invalid_count = otrcl_integrity["mask_counts"][
-                "positive_invalid"
-            ]
-            otrcl_integrity["supervision_audit"] = {
-                "Wc_window_supervision_only": True,
-                "Wc_has_node_mask": False,
-                "Wf_window_anomaly_supervision": True,
-                "Wf_direct_node_supervision": True,
-                "primary_Wf_losses_require_valid_Wplus": True,
-                "primary_Wc_losses_require_valid_Wplus": True,
-                "positive_node_consistency_is_validity_masked": False,
-                "positive_fidelity_is_validity_masked": False,
-                "positive_invalid_enters_node_consistency": bool(
-                    positive_invalid_count > 0
-                    and float(
-                        self.cfg.GFM4MTSAD.LOSS.POSITIVE_NODE_CONSISTENCY_WEIGHT
-                    )
-                    > 0.0
-                ),
-                "positive_invalid_enters_fidelity": bool(
-                    positive_invalid_count > 0
-                    and float(self.cfg.GFM4MTSAD.LOSS.FIDELITY_WEIGHT) > 0.0
-                ),
-                "fine_valid_count_before_Wplus_gate": int(
-                    fine_valid_mask.sum().item()
-                ),
-                "fine_valid_count_after_Wplus_gate": int(
-                    valid_negative_mask.sum().item()
-                ),
-            }
         self._update_counterfactual_model_diagnostics(
             outputs_anchor,
             outputs_positive,
@@ -2653,442 +1940,17 @@ class GFM4MTSADTrainer(Trainer):
         loss_coarse_rank = loss_temporal_contrastive
         loss_coarse_bce = loss_temporal_contrastive
         coarse_valid_mask = None
-        if temporal_views is not None:
-            coarse_valid_mask = temporal_views["coarse_valid_mask"].bool()
-            coarse_valid_mask = coarse_valid_mask & temporal_views[
-                "positive_valid_mask"
-            ].bool()
-            if coarse_valid_mask.any():
-                if bool(self.otrcl_settings.TEMPORAL_ENABLE):
-                    temporal_loss = temporal_regime_contrastive_loss(
-                        outputs_anchor["temporal_regime_embedding"][
-                            coarse_valid_mask
-                        ],
-                        outputs_positive["temporal_regime_embedding"][
-                            coarse_valid_mask
-                        ],
-                        outputs_coarse["temporal_regime_embedding"][
-                            coarse_valid_mask
-                        ],
-                        temperature=float(
-                            self.otrcl_settings.TEMPORAL_TEMPERATURE
-                        ),
-                    )
-                    loss_temporal_contrastive = temporal_loss["total"]
-                loss_coarse_rank = ranking_loss(
-                    outputs_anchor["window_score"][coarse_valid_mask],
-                    outputs_coarse["window_score"][coarse_valid_mask],
-                    self.cfg.GFM4MTSAD.LOSS.RANK_MARGIN,
-                )
-                loss_coarse_bce = window_bce_loss(
-                    outputs_anchor["window_score"][coarse_valid_mask],
-                    outputs_coarse["window_score"][coarse_valid_mask],
-                    outputs_positive["window_score"][coarse_valid_mask],
-                )
-            elif bool(self.otrcl_settings.TEMPORAL_ENABLE):
-                temporal_loss = {
-                    "total": loss_temporal_contrastive,
-                    "positive_similarity": loss_temporal_contrastive.detach(),
-                    "coarse_similarity": loss_temporal_contrastive.detach(),
-                    "similarity_gap": loss_temporal_contrastive.detach(),
-                    "sample_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                }
         tail_window_loss = None
-        if tail_window_contrast_enabled:
-            if valid_negative_mask.any():
-                tail_window_loss = (
-                    tail_preserving_mechanism_window_contrastive_loss(
-                        outputs_anchor["graph_embedding"][valid_negative_mask],
-                        outputs_positive["graph_embedding"][valid_negative_mask],
-                        outputs_negative["graph_embedding"][valid_negative_mask],
-                        outputs_anchor["window_score"][valid_negative_mask],
-                        outputs_positive["window_score"][valid_negative_mask],
-                        outputs_negative["window_score"][valid_negative_mask],
-                        global_temperature=float(
-                            tail_window_contrast_settings.GLOBAL_TEMPERATURE
-                        ),
-                        window_temperature=float(
-                            tail_window_contrast_settings.WINDOW_TEMPERATURE
-                        ),
-                        mechanism_margin=float(
-                            tail_window_contrast_settings.MECHANISM_MARGIN
-                        ),
-                        normal_variation_weight=float(
-                            tail_window_contrast_settings.NORMAL_VARIATION_WEIGHT
-                        ),
-                        window_loss_weight=float(
-                            tail_window_contrast_settings.WINDOW_LOSS_WEIGHT
-                        ),
-                        tail_loss_weight=float(
-                            tail_window_contrast_settings.TAIL_LOSS_WEIGHT
-                        ),
-                        tail_fraction=float(
-                            tail_window_contrast_settings.TAIL_FRACTION
-                        ),
-                        tail_temperature=float(
-                            tail_window_contrast_settings.TAIL_TEMPERATURE
-                        ),
-                        tail_budget=float(
-                            tail_window_contrast_settings.TAIL_BUDGET
-                        ),
-                        sample_weights=valid_sample_weights,
-                    )
-                )
-            else:
-                graph_zero = (
-                    outputs_anchor["graph_embedding"].sum()
-                    + outputs_positive["graph_embedding"].sum()
-                    + outputs_negative["graph_embedding"].sum()
-                ) * 0.0
-                risk_zero = (
-                    outputs_anchor["window_score"].sum()
-                    + outputs_positive["window_score"].sum()
-                    + outputs_negative["window_score"].sum()
-                ) * 0.0
-                count_zero = torch.zeros(
-                    (), device=windows.device, dtype=torch.long
-                )
-                tail_window_loss = {
-                    "total": graph_zero,
-                    "global": graph_zero,
-                    "window": risk_zero,
-                    "weighted_window": risk_zero,
-                    "tail": risk_zero,
-                    "weighted_tail": risk_zero,
-                    "global_gap": graph_zero.detach().clone(),
-                    "normal_variation": risk_zero.detach().clone(),
-                    "normal_reference": risk_zero.detach().clone(),
-                    "negative_risk": risk_zero.detach().clone(),
-                    "mechanism_gain": risk_zero.detach().clone(),
-                    "required_gain": risk_zero.detach().clone(),
-                    "window_pair_gap": risk_zero.detach().clone(),
-                    "pair_satisfaction": risk_zero.detach().clone(),
-                    "normal_center_reference": risk_zero.detach().clone(),
-                    "hard_normal_tail_reference": risk_zero.detach().clone(),
-                    "hard_normal_tail_mean": risk_zero.detach().clone(),
-                    "tail_excess_mean": risk_zero.detach().clone(),
-                    "tail_violation_rate": risk_zero.detach().clone(),
-                    "weight_sum": risk_zero.detach().clone(),
-                    "sample_count": count_zero,
-                    "hard_tail_count": count_zero.clone(),
-                    "window_measured": False,
-                    "tail_measured": False,
-                }
-            self._record_tail_preserving_window_contrast(
-                tail_window_loss,
-                training=bool(self.model.training),
-            )
-            relation_loss = None
-            loss_paired_contrastive = tail_window_loss["total"]
         native_evidence_loss = None
-        if native_evidence_contrast_enabled:
-            if valid_negative_mask.any():
-                native_evidence_loss = native_evidence_mechanism_contrastive_loss(
-                    outputs_anchor["graph_embedding"][valid_negative_mask],
-                    outputs_positive["graph_embedding"][valid_negative_mask],
-                    outputs_negative["graph_embedding"][valid_negative_mask],
-                    outputs_anchor["native_node_scores"][valid_negative_mask],
-                    outputs_positive["native_node_scores"][valid_negative_mask],
-                    outputs_negative["native_node_scores"][valid_negative_mask],
-                    direct_node_mask[valid_negative_mask],
-                    global_temperature=float(
-                        native_evidence_contrast_settings.GLOBAL_TEMPERATURE
-                    ),
-                    local_temperature=float(
-                        native_evidence_contrast_settings.LOCAL_TEMPERATURE
-                    ),
-                    pair_margin=float(
-                        native_evidence_contrast_settings.PAIR_MARGIN
-                    ),
-                    local_loss_weight=float(
-                        native_evidence_contrast_settings.LOCAL_LOSS_WEIGHT
-                    ),
-                    sample_weights=valid_sample_weights,
-                    eps=float(native_evidence_contrast_settings.EPS),
-                    min_reference_scale=float(
-                        native_evidence_contrast_settings.MIN_REFERENCE_SCALE
-                    ),
-                )
-            else:
-                graph_zero = (
-                    outputs_anchor["graph_embedding"].sum()
-                    + outputs_positive["graph_embedding"].sum()
-                    + outputs_negative["graph_embedding"].sum()
-                ) * 0.0
-                evidence_zero = (
-                    outputs_anchor["native_node_scores"][..., :0].sum()
-                    + outputs_positive["native_node_scores"][..., :0].sum()
-                    + outputs_negative["native_node_scores"][..., :0].sum()
-                ) * 0.0
-                native_evidence_loss = {
-                    "total": graph_zero,
-                    "global": graph_zero,
-                    "local": evidence_zero,
-                    "weighted_local": evidence_zero,
-                    "local_pair": evidence_zero,
-                    "global_gap": graph_zero.detach().clone(),
-                    "pair_gap": evidence_zero.detach().clone(),
-                    "reference_evidence": evidence_zero.detach().clone(),
-                    "negative_evidence": evidence_zero.detach().clone(),
-                    "pair_satisfaction": evidence_zero.detach().clone(),
-                    "global_weight_sum": graph_zero.detach().clone(),
-                    "local_weight_sum": evidence_zero.detach().clone(),
-                    "local_measured": False,
-                    "sample_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                    "local_sample_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                    "direct_node_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                }
-            self._record_native_evidence_mechanism_contrast(
-                native_evidence_loss,
-                training=bool(self.model.training),
-            )
-            relation_loss = None
-            loss_paired_contrastive = native_evidence_loss["total"]
         decoupled_loss = None
-        if decoupled_local_global_enabled:
-            if valid_negative_mask.any():
-                decoupled_loss = decoupled_local_global_contrastive_loss(
-                    outputs_anchor["graph_embedding"][valid_negative_mask],
-                    outputs_positive["graph_embedding"][valid_negative_mask],
-                    outputs_negative["graph_embedding"][valid_negative_mask],
-                    outputs_anchor["node_embeddings"][valid_negative_mask],
-                    outputs_positive["node_embeddings"][valid_negative_mask],
-                    outputs_negative["node_embeddings"][valid_negative_mask],
-                    direct_node_mask[valid_negative_mask],
-                    global_temperature=float(
-                        decoupled_local_global_settings.GLOBAL_TEMPERATURE
-                    ),
-                    local_temperature=float(
-                        decoupled_local_global_settings.LOCAL_TEMPERATURE
-                    ),
-                    global_margin=float(
-                        decoupled_local_global_settings.GLOBAL_MARGIN
-                    ),
-                    local_margin=float(
-                        decoupled_local_global_settings.LOCAL_MARGIN
-                    ),
-                    local_loss_weight=float(
-                        decoupled_local_global_settings.LOCAL_LOSS_WEIGHT
-                    ),
-                    sample_weights=valid_sample_weights,
-                )
-            else:
-                graph_zero = (
-                    outputs_anchor["graph_embedding"].sum()
-                    + outputs_positive["graph_embedding"].sum()
-                    + outputs_negative["graph_embedding"].sum()
-                ) * 0.0
-                node_zero = (
-                    outputs_anchor["node_embeddings"].sum()
-                    + outputs_positive["node_embeddings"].sum()
-                    + outputs_negative["node_embeddings"].sum()
-                ) * 0.0
-                decoupled_loss = {
-                    "total": graph_zero,
-                    "global": graph_zero,
-                    "local": node_zero,
-                    "weighted_local": node_zero,
-                    "global_gap": graph_zero.detach().clone(),
-                    "direct_gap": node_zero.detach().clone(),
-                    "global_weight_sum": graph_zero.detach().clone(),
-                    "local_weight_sum": node_zero.detach().clone(),
-                    "local_measured": False,
-                    "sample_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                    "local_sample_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                    "direct_node_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                }
-            self._record_decoupled_local_global_contrast(
-                decoupled_loss,
-                training=bool(self.model.training),
-            )
-            relation_loss = None
-            loss_paired_contrastive = decoupled_loss["total"]
-        if local_global_enabled:
-            # 只在已通过 Graph-VAR 接受门槛的样本上比较局部—全局增量；
-            # propagated 与额外 consistency exclusion 均不冒充“未变节点”。
-            unchanged_node_mask = ~(
-                direct_node_mask.bool()
-                | propagated_node_mask.bool()
-                | consistency_exclusion_mask.bool()
-            )
-            if valid_negative_mask.any():
-                local_global_loss = (
-                    mechanism_conditioned_local_global_contrastive_loss(
-                        outputs_anchor["graph_embedding"][valid_negative_mask],
-                        outputs_positive["graph_embedding"][valid_negative_mask],
-                        outputs_negative["graph_embedding"][valid_negative_mask],
-                        outputs_anchor["node_embeddings"][valid_negative_mask],
-                        outputs_positive["node_embeddings"][valid_negative_mask],
-                        outputs_negative["node_embeddings"][valid_negative_mask],
-                        direct_node_mask[valid_negative_mask],
-                        unchanged_node_mask=unchanged_node_mask[
-                            valid_negative_mask
-                        ],
-                        temperature=float(local_global_settings.TEMPERATURE),
-                        margin=float(local_global_settings.MARGIN),
-                        direct_weight=float(
-                            local_global_settings.DIRECT_WEIGHT
-                        ),
-                        unchanged_weight=float(
-                            local_global_settings.UNCHANGED_WEIGHT
-                        ),
-                        sample_weights=valid_sample_weights,
-                    )
-                )
-            else:
-                zero = outputs_anchor["graph_embedding"].sum() * 0.0
-                local_global_loss = {
-                    "total": zero,
-                    "global_gap": zero,
-                    "direct_gap": zero,
-                    "unchanged_drift": zero,
-                    "counterfactual_gap": zero,
-                    "sample_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                    "direct_node_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                    "unchanged_node_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                }
-            self._record_local_global_contrast(
-                local_global_loss,
-                training=bool(self.model.training),
-            )
-            relation_loss = None
-            loss_paired_contrastive = local_global_loss["total"]
-        elif self.otrcl_enabled and bool(
-            self.otrcl_settings.RELATIONAL_ENABLE
-        ):
-            required = "native_relational_residual"
-            if not all(
-                required in outputs
-                for outputs in (
-                    outputs_anchor,
-                    outputs_positive,
-                    outputs_negative,
-                )
-            ):
-                raise RuntimeError(
-                    "OTR-CL relation branch did not receive native GFM "
-                    "relational residuals"
-                )
-            unchanged_node_mask = ~(
-                direct_node_mask.bool()
-                | propagated_node_mask.bool()
-                | consistency_exclusion_mask.bool()
-            )
-            if valid_negative_mask.any():
-                relation_loss = relational_node_contrastive_loss(
-                    outputs_anchor[required][valid_negative_mask],
-                    outputs_positive[required][valid_negative_mask],
-                    outputs_negative[required][valid_negative_mask],
-                    direct_node_mask[valid_negative_mask],
-                    unchanged_node_mask[valid_negative_mask],
-                    temperature=float(
-                        self.otrcl_settings.RELATIONAL_TEMPERATURE
-                    ),
-                    unchanged_weight=float(
-                        self.otrcl_settings.RELATIONAL_UNCHANGED_WEIGHT
-                    ),
-                    sample_weights=valid_sample_weights,
-                )
-            else:
-                zero = (
-                    outputs_anchor[required].sum()
-                    + outputs_positive[required].sum()
-                    + outputs_negative[required].sum()
-                ) * 0.0
-                relation_loss = {
-                    "total": zero,
-                    "direct": zero,
-                    "unchanged": zero,
-                    "weighted_unchanged": zero,
-                    "direct_similarity_gap": zero.detach(),
-                    "unchanged_drift": zero.detach(),
-                    "direct_node_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                    "unchanged_node_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                    "sample_count": torch.zeros(
-                        (), device=windows.device, dtype=torch.long
-                    ),
-                }
-            loss_paired_contrastive = relation_loss["total"]
-        elif relation_residual_enabled:
-            if not all(
-                "relation_residual" in outputs
-                for outputs in (outputs_anchor, outputs_positive, outputs_negative)
-            ):
-                raise RuntimeError(
-                    "机制关系对比已启用，但时间—图关系残差没有拟合或没有输出"
-                )
-            if relation_contrast_target == "relation_residual":
-                relation_loss = mechanism_matched_relation_contrastive_loss(
-                    outputs_anchor["relation_residual"][valid_negative_mask],
-                    outputs_positive["relation_residual"][valid_negative_mask],
-                    outputs_negative["relation_residual"][valid_negative_mask],
-                    direct_node_mask[valid_negative_mask],
-                    unchanged_node_mask=(
-                        ~direct_node_mask[valid_negative_mask].bool()
-                        & ~propagated_node_mask[valid_negative_mask].bool()
-                    ),
-                    temperature=float(
-                        self.cfg.GFM4MTSAD.RELATION_RESIDUAL_CONTRAST.TEMPERATURE
-                    ),
-                    unchanged_weight=float(
-                        self.cfg.GFM4MTSAD.RELATION_RESIDUAL_CONTRAST.UNCHANGED_WEIGHT
-                    ),
-                    sample_weights=valid_sample_weights,
-                )
-                loss_paired_contrastive = relation_loss["total"]
-            elif relation_contrast_target == "graph_embedding":
-                # 严格目标对照：视图和其他监督保持不变，只恢复旧图级对比目标。
-                relation_loss = None
-                loss_paired_contrastive = carots_style_contrastive_loss(
-                    outputs_anchor["graph_embedding"][valid_negative_mask],
-                    outputs_positive["graph_embedding"][valid_negative_mask],
-                    outputs_negative["graph_embedding"][valid_negative_mask],
-                    self.cfg.GFM4MTSAD.CONTRAST.TEMPERATURE,
-                    sample_weights=valid_sample_weights,
-                )
-            else:
-                raise ValueError(
-                    "未知机制匹配对比目标: "
-                    f"{relation_contrast_target}; 可选 relation_residual 或 "
-                    "graph_embedding"
-                )
-        elif (
-            not decoupled_local_global_enabled
-            and not native_evidence_contrast_enabled
-            and not tail_window_contrast_enabled
-        ):
-            relation_loss = None
-            loss_paired_contrastive = carots_style_contrastive_loss(
-                outputs_anchor["graph_embedding"][valid_negative_mask],
-                outputs_positive["graph_embedding"][valid_negative_mask],
-                outputs_negative["graph_embedding"][valid_negative_mask],
-                self.cfg.GFM4MTSAD.CONTRAST.TEMPERATURE,
-                sample_weights=valid_sample_weights,
-            )
+        relation_loss = None
+        loss_paired_contrastive = carots_style_contrastive_loss(
+            outputs_anchor["graph_embedding"][valid_negative_mask],
+            outputs_positive["graph_embedding"][valid_negative_mask],
+            outputs_negative["graph_embedding"][valid_negative_mask],
+            self.cfg.GFM4MTSAD.CONTRAST.TEMPERATURE,
+            sample_weights=valid_sample_weights,
+        )
         batch_hard_contrast_enabled = bool(
             getattr(
                 self.cfg.GFM4MTSAD.LOSS,
@@ -3103,19 +1965,6 @@ class GFM4MTSADTrainer(Trainer):
                 False,
             )
         )
-        if (
-            relation_residual_enabled
-            or local_global_enabled
-            or decoupled_local_global_enabled
-            or native_evidence_contrast_enabled
-            or tail_window_contrast_enabled
-            or self.otrcl_enabled
-        ) and (
-            batch_hard_contrast_enabled or node_aware_hard_contrast_enabled
-        ):
-            raise ValueError(
-                "局部关系对比候选不能与旧 hard contrast 单因素候选同时启用"
-            )
         if batch_hard_contrast_enabled and node_aware_hard_contrast_enabled:
             raise ValueError(
                 "Batch-hard graph contrast and node-aware hard contrast "
@@ -3177,113 +2026,6 @@ class GFM4MTSADTrainer(Trainer):
             loss_batch_hard_contrastive = None
             loss_node_aware_hard_contrastive = None
             loss_contrastive = loss_paired_contrastive
-        if temporal_views is not None:
-            generator_diagnostics = temporal_views["diagnostics"]
-            integrity_views = otrcl_integrity["views"]
-            integrity_direction = otrcl_integrity[
-                "directional_separation"
-            ]
-
-            def integrity_value(view_name, metric_name):
-                value = integrity_views[view_name][metric_name][
-                    "accepted_mean"
-                ]
-                return float(value) if value is not None else 0.0
-
-            def directional_value(name):
-                value = integrity_direction[name]
-                return float(value) if value is not None else 0.0
-
-            coarse_score_gap = outputs_anchor["window_score"].sum() * 0.0
-            if coarse_valid_mask is not None and coarse_valid_mask.any():
-                coarse_score_gap = (
-                    outputs_coarse["window_score"][coarse_valid_mask]
-                    - outputs_anchor["window_score"][coarse_valid_mask]
-                ).detach().mean()
-            self.last_otrcl_diagnostics = {
-                "batch_size": int(windows.size(0)),
-                "positive_valid_count": int(
-                    temporal_views["positive_valid_mask"].sum().item()
-                ),
-                "coarse_valid_count": int(
-                    temporal_views["coarse_valid_mask"].sum().item()
-                ),
-                "positive_temporal_drift_mean": float(
-                    generator_diagnostics["positive_temporal_drift"].mean()
-                ),
-                "positive_graph_drift_mean": float(
-                    generator_diagnostics["positive_graph_drift"].mean()
-                ),
-                "coarse_temporal_drift_mean": float(
-                    generator_diagnostics["coarse_temporal_drift"].clamp_min(0.0).mean()
-                ),
-                "coarse_graph_drift_mean": float(
-                    generator_diagnostics["coarse_graph_drift"][
-                        torch.isfinite(
-                            generator_diagnostics["coarse_graph_drift"]
-                        )
-                    ].mean()
-                    if torch.isfinite(
-                        generator_diagnostics["coarse_graph_drift"]
-                    ).any()
-                    else 0.0
-                ),
-                "coarse_score_gap": float(coarse_score_gap),
-                "temporal_similarity_gap": float(
-                    temporal_loss["similarity_gap"]
-                    if temporal_loss is not None
-                    else 0.0
-                ),
-                "relational_similarity_gap": float(
-                    relation_loss["direct_similarity_gap"]
-                    if relation_loss is not None
-                    and "direct_similarity_gap" in relation_loss
-                    else 0.0
-                ),
-                "relational_unchanged_drift": float(
-                    relation_loss["unchanged_drift"]
-                    if relation_loss is not None
-                    and "unchanged_drift" in relation_loss
-                    else 0.0
-                ),
-                "temporal_loss": float(loss_temporal_contrastive.detach()),
-                "relational_loss": float(loss_contrastive.detach())
-                if bool(self.otrcl_settings.RELATIONAL_ENABLE)
-                else 0.0,
-                "coarse_rank_loss": float(loss_coarse_rank.detach()),
-                "coarse_bce_loss": float(loss_coarse_bce.detach()),
-                "positive_relational_drift_mean": integrity_value(
-                    "W+", "relational_drift"
-                ),
-                "coarse_relational_drift_mean": integrity_value(
-                    "Wc", "relational_drift"
-                ),
-                "fine_temporal_drift_mean": integrity_value(
-                    "Wf", "temporal_drift"
-                ),
-                "fine_graph_drift_mean": integrity_value(
-                    "Wf", "graph_drift"
-                ),
-                "fine_relational_drift_mean": integrity_value(
-                    "Wf", "relational_drift"
-                ),
-                "wc_minus_wf_temporal_drift": directional_value(
-                    "wc_minus_wf_temporal_drift"
-                ),
-                "wf_minus_wc_relational_drift": directional_value(
-                    "wf_minus_wc_relational_drift"
-                ),
-                "fine_valid_count": int(
-                    fine_valid_mask.sum().item()
-                ),
-                "direct_node_count": int(
-                    direct_node_mask.bool().sum().item()
-                ),
-                "unchanged_node_count": int(
-                    otrcl_integrity["mask_counts"]["unchanged_nodes"]
-                ),
-                "method_integrity": otrcl_integrity,
-            }
         loss_positive_node_consistency = masked_node_consistency_loss(
             outputs_anchor["direct_node_score_logits"],
             outputs_positive["direct_node_score_logits"],
@@ -3380,12 +2122,6 @@ class GFM4MTSADTrainer(Trainer):
             "Rank": loss_rank,
             "WindowBCE": loss_window_bce,
         }
-        if temporal_views is not None:
-            gradient_audit_losses.update({
-                "TemporalContrastive": loss_temporal_contrastive,
-                "CoarseRank": loss_coarse_rank,
-                "CoarseBCE": loss_coarse_bce,
-            })
         if decoupled_loss is not None:
             # 记录实际进入总目标的局部加权分量，便于直接判断它是否压过
             # 窗口主目标或与节点/排序监督持续冲突。
@@ -3458,12 +2194,6 @@ class GFM4MTSADTrainer(Trainer):
             else 0.0
         )
         contrastive_weight = float(self.cfg.GFM4MTSAD.LOSS.CONTRASTIVE_WEIGHT)
-        if self.otrcl_enabled and bool(
-            self.otrcl_settings.RELATIONAL_ENABLE
-        ):
-            contrastive_weight = float(
-                self.otrcl_settings.RELATIONAL_LOSS_WEIGHT
-            )
         loss = (
             contrastive_weight * loss_contrastive
             + self.cfg.GFM4MTSAD.LOSS.NODE_WEIGHT * loss_node
@@ -3476,16 +2206,6 @@ class GFM4MTSADTrainer(Trainer):
             * loss_unmodified_node_consistency
             + retention_weight * loss_bridge_retention
         )
-        if temporal_views is not None:
-            loss = (
-                loss
-                + float(self.otrcl_settings.TEMPORAL_LOSS_WEIGHT)
-                * loss_temporal_contrastive
-                + float(self.otrcl_settings.COARSE_RANK_WEIGHT)
-                * loss_coarse_rank
-                + float(self.otrcl_settings.COARSE_BCE_WEIGHT)
-                * loss_coarse_bce
-            )
         return self._pack_losses(
             loss,
             loss_contrastive,
@@ -3500,9 +2220,9 @@ class GFM4MTSADTrainer(Trainer):
             loss_tail_rank,
             loss_batch_hard_contrastive,
             loss_node_aware_hard_contrastive,
-            loss_temporal_contrastive if temporal_views is not None else None,
-            loss_coarse_rank if temporal_views is not None else None,
-            loss_coarse_bce if temporal_views is not None else None,
+            None,
+            None,
+            None,
         )
 
     def _build_counterfactual_node_evidence(self, outputs_anchor, adjacency):
@@ -4069,22 +2789,6 @@ class GFM4MTSADTrainer(Trainer):
 
         self.optimizer.zero_grad()
         loss.backward()
-        if self.otrcl_enabled:
-            self.last_otrcl_gradient_diagnostics = (
-                gradient_clip_diagnostics(
-                    self.model.named_parameters(),
-                    clip_enabled=bool(self.cfg.SOLVER.GRADIENT_CLIP),
-                    clip_threshold=float(
-                        self.cfg.SOLVER.GRADIENT_CLIP_NORM
-                    ),
-                    temporal_representation_enters_inference=bool(
-                        self.otrcl_settings.PROGRESSIVE_GRAPH_FUSION
-                    ),
-                )
-            )
-            self.last_otrcl_diagnostics["gradient_clipping"] = dict(
-                self.last_otrcl_gradient_diagnostics
-            )
         if self.cfg.SOLVER.GRADIENT_CLIP:
             torch.nn.utils.clip_grad_norm_(
                 optim.get_trainable_params(self.model),

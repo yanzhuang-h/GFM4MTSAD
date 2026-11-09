@@ -2,22 +2,11 @@ import math
 import random
 
 import torch
+from training.config_merge import require_main_recipe
 
-from models.gfm4mtsad.frontend_graph_effective_selector import (
-    FrontendGraphEffectiveSelector,
-)
-from models.gfm4mtsad.frozen_gfm_teacher_selector import FrozenGFMTeacherSelector
-from models.gfm4mtsad.otrcl_integrity import (
-    normalized_graph_drift,
-    normalized_temporal_drift,
-)
+from models.gfm4mtsad.view_distance import normalized_graph_drift, normalized_temporal_drift
 
 from models.gfm4mtsad.normal_mechanism import GlobalGraphVARMechanism
-from models.gfm4mtsad.funtsg_inspired import function_candidates
-from models.gfm4mtsad.mechanism_matched import (
-    MechanismMatchedPairBuilder,
-    temporal_pair_fairness,
-)
 
 
 class GFM4MTSADAugmentor:
@@ -37,9 +26,8 @@ class GFM4MTSADAugmentor:
     ACCEPTANCE_HARD = 2
 
     def __init__(self, cfg):
+        require_main_recipe(cfg)
         self.candidate_generator = str(getattr(cfg.GFM4MTSAD.SYNTHETIC, "CANDIDATE_GENERATOR", "graph_var"))
-        if self.candidate_generator not in ("graph_var", "funtsg_inspired", "hybrid"):
-            raise ValueError("unknown CANDIDATE_GENERATOR")
         self.generator_counts = {name: dict(proposed=0, generated=0, accepted=0, selected=0)
                                  for name in ("graph_var", "funtsg_inspired", "legacy")}
         self.generator_cells = {}
@@ -526,10 +514,7 @@ class GFM4MTSADAugmentor:
             else None
         )
         self.frontend_graph_effective_selector = (
-            FrontendGraphEffectiveSelector(cfg)
-            if self.negative_screening_mode
-            in ("frontend_graph_effective", "frontend_primary")
-            else None
+            None
         )
         self.frozen_gfm_teacher_selector = None
         self.coverage_balanced_schedule_enable = bool(
@@ -602,8 +587,6 @@ class GFM4MTSADAugmentor:
                 "Unsupported GFM4MTSAD.SYNTHETIC.SEED_SELECTION: "
                 f"{self.seed_selection}"
             )
-        if self.candidate_generator != "graph_var" and (self.normal_mechanism is None or self.edit_mode != "direct_quantile"):
-            raise ValueError("function/hybrid candidates require Graph-VAR scoring and direct_quantile selection")
         if self.seed_selection == "mechanism_aware" and self.normal_mechanism is None:
             raise ValueError(
                 "mechanism_aware seed selection requires a fitted "
@@ -619,27 +602,9 @@ class GFM4MTSADAugmentor:
                 "Mechanism-availability routing requires "
                 "adaptive_graph_var direct_quantile training"
             )
-        if self.negative_screening_mode not in (
-            "legacy_boundary",
-            "gm_hns",
-            "frontend_graph_effective",
-            "frontend_primary",
-            "frozen_gfm_teacher",
-        ):
-            raise ValueError(
-                "Unsupported GFM4MTSAD.SYNTHETIC.NEGATIVE_SCREENING_MODE: "
-                f"{self.negative_screening_mode}"
-            )
         if not 0.0 < self.frontend_primary_nonlegacy_weight <= 1.0:
             raise ValueError(
                 "FRONTEND_PRIMARY_NONLEGACY_WEIGHT must satisfy 0 < weight <= 1"
-            )
-        if (
-            self.negative_screening_mode == "frontend_primary"
-            and self.wf_orthogonality_enable
-        ):
-            raise ValueError(
-                "frontend_primary screening is not defined for Wf orthogonality"
             )
         if not (
             0.0 <= self.gm_hns_difficulty_low
@@ -840,49 +805,6 @@ class GFM4MTSADAugmentor:
             return {}
         return self.normal_mechanism.fit(source)
 
-    @property
-    def requires_frontend_graph_selector(self):
-        return self.frontend_graph_effective_selector is not None
-
-    def fit_frontend_graph_selector(self, frontend, graph_builder, source):
-        """Bind v2.2 to the frozen frontend and fit train-normal scale only."""
-        if self.frontend_graph_effective_selector is None:
-            return {}
-        if self.normal_mechanism is None or not self.normal_mechanism.fitted:
-            raise RuntimeError(
-                "Fit the normal Graph-VAR before the frontend-effective selector"
-            )
-        self.frontend_graph_effective_selector.bind(frontend, graph_builder)
-        return self.frontend_graph_effective_selector.fit(
-            source,
-            self.normal_mechanism.valid_nodes,
-        )
-
-    @property
-    def requires_frozen_gfm_teacher(self):
-        return self.negative_screening_mode == "frozen_gfm_teacher"
-
-    def bind_frozen_gfm_teacher(self, teacher):
-        if not self.requires_frozen_gfm_teacher:
-            return {}
-        if self.normal_mechanism is None or not self.normal_mechanism.fitted:
-            raise RuntimeError(
-                "Fit the normal Graph-VAR before binding the frozen GFM teacher"
-            )
-        self.frozen_gfm_teacher_selector = FrozenGFMTeacherSelector(
-            teacher,
-            self.normal_mechanism.valid_nodes,
-        )
-        self.collect_candidate_records = True
-        self.frozen_gfm_teacher_selector.require_ready()
-        return {
-            "bound": True,
-            "valid_node_count": int(
-                self.normal_mechanism.valid_nodes.sum().item()
-            ),
-            "uses_test_labels": False,
-            "teacher_trainable": False,
-        }
 
     def next_coverage_balanced_schedule(self, batch_size):
         if not self.coverage_balanced_schedule_enable:
@@ -914,142 +836,6 @@ class GFM4MTSADAugmentor:
             "diagnostic_event_scales": [cell[2] for cell in assigned],
         }
 
-    def mechanism_matched_views(
-        self,
-        windows,
-        adjacency,
-        node_evidence=None,
-        progress=1.0,
-        collect_diagnostics=True,
-    ):
-        """生成共享目标轨迹、错位父节点响应的机制匹配三元组。"""
-        if self.normal_mechanism is None or not self.normal_mechanism.fitted:
-            raise RuntimeError("机制匹配视图需要已拟合的 Graph-VAR")
-        builder = MechanismMatchedPairBuilder(
-            self.normal_mechanism,
-            lag_offset=self.mechanism_matched_lag_offset,
-        )
-        batch_size, win_size, n_var = windows.shape
-        positive = windows.clone()
-        negative = windows.clone()
-        direct_mask = torch.zeros(
-            batch_size,
-            n_var,
-            device=windows.device,
-            dtype=torch.bool,
-        )
-        context_mask = torch.zeros_like(direct_mask)
-        valid_mask = torch.zeros(
-            batch_size,
-            device=windows.device,
-            dtype=torch.bool,
-        )
-        anomaly_type_ids = torch.zeros(
-            batch_size,
-            device=windows.device,
-            dtype=torch.long,
-        )
-        seed_ids = torch.full(
-            (batch_size,),
-            -1,
-            device=windows.device,
-            dtype=torch.long,
-        )
-        segment_length = min(
-            win_size,
-            max(4, int(round(win_size * self.synthetic_time_ratio))),
-        )
-        strength = self._scheduled_edit_strength(progress)
-        for batch_idx in range(batch_size):
-            eligible = self.normal_mechanism.eligible_nodes(
-                "neighbor_break",
-                windows.device,
-            )
-            if eligible.numel() == 0:
-                continue
-            seed, _ = self._sample_seed(
-                adjacency[batch_idx],
-                n_var,
-                node_evidence=node_evidence[batch_idx]
-                if node_evidence is not None
-                else None,
-                eligible_nodes=eligible,
-            )
-            min_start = self.normal_mechanism.lags + 2
-            max_start = win_size - segment_length
-            if max_start < min_start:
-                continue
-            decision_rng = self._decision_rng or random
-            start = decision_rng.randint(min_start, max_start)
-            result = builder.build(
-                windows[batch_idx],
-                seed=seed,
-                start=start,
-                end=start + segment_length,
-                strength=strength,
-            )
-            if result is None:
-                continue
-            positive[batch_idx] = result["positive"]
-            negative[batch_idx] = result["negative"]
-            direct_mask[batch_idx] = result["direct_mask"]
-            context_mask[batch_idx] = result["context_mask"]
-            valid_mask[batch_idx] = True
-            seed_ids[batch_idx] = seed
-
-        self.last_valid_mask = valid_mask
-        self.last_sample_weights = valid_mask.to(windows.dtype)
-        self.last_acceptance_tier = torch.where(
-            valid_mask,
-            torch.full_like(seed_ids, self.ACCEPTANCE_HARD),
-            torch.full_like(seed_ids, self.ACCEPTANCE_INVALID),
-        )
-        self.last_rms_rescue_mask = torch.zeros_like(valid_mask)
-        self.last_selected_delta_rms = torch.zeros_like(self.last_sample_weights)
-        self.last_edit_source_ids = torch.where(
-            valid_mask,
-            torch.full_like(seed_ids, self.EDIT_SOURCE_DIRECT),
-            torch.full_like(seed_ids, self.EDIT_SOURCE_INVALID),
-        )
-        self.last_fallback_type_ids = torch.full_like(seed_ids, -1)
-        self.last_direct_type_ids = torch.where(
-            valid_mask,
-            torch.zeros_like(seed_ids),
-            torch.full_like(seed_ids, -1),
-        )
-        self.last_seed_ids = seed_ids
-        self.last_consistency_exclusion_mask = direct_mask | context_mask
-        self.last_coverage_diagnostics = {
-            "attempted_count": batch_size,
-            "valid_count": int(valid_mask.sum().item()),
-            "valid_ratio": float(valid_mask.float().mean().item()),
-            "matched_lag_offset": self.mechanism_matched_lag_offset,
-        }
-        if collect_diagnostics and valid_mask.any():
-            fairness = temporal_pair_fairness(
-                windows[valid_mask],
-                positive[valid_mask],
-                negative[valid_mask],
-            )
-            self.last_diagnostics = {
-                **self.last_coverage_diagnostics,
-                **{
-                    name: float(value.mean().item())
-                    for name, value in fairness.items()
-                },
-                "target_shared_max_abs": float(
-                    (positive[valid_mask] - negative[valid_mask])
-                    .gather(2, seed_ids[valid_mask].view(-1, 1, 1).expand(-1, win_size, 1))
-                    .abs()
-                    .amax()
-                    .item()
-                ),
-                "edit_mode": "mechanism_matched_lag",
-                "edit_strength": float(strength),
-            }
-        else:
-            self.last_diagnostics = dict(self.last_coverage_diagnostics)
-        return positive, negative, direct_mask.float(), context_mask.float(), anomaly_type_ids
 
     def normal_mechanism_diagnostics(self):
         if self.normal_mechanism is None:
@@ -1944,22 +1730,7 @@ class GFM4MTSADAugmentor:
         self_temporal_route_attempt_count = 0
         self_temporal_route_selected_count = 0
         frontend_selector = self.frontend_graph_effective_selector
-        if frontend_selector is not None:
-            if frontend_reference is None:
-                frontend_reference = frontend_selector.encode_original(windows)
-            else:
-                if (
-                    frontend_reference.ndim != 3
-                    or frontend_reference.size(0) != batch_size
-                    or frontend_reference.size(1) != n_var
-                ):
-                    raise ValueError(
-                        "Frontend reference must match [B, N, F] for v2.2 "
-                        f"screening, got {tuple(frontend_reference.shape)}"
-                    )
-                frontend_reference = frontend_reference.detach()
-        else:
-            frontend_reference = None
+        frontend_reference = None
         segment_attempt_counts = self._empty_event_scale_counts()
         segment_selected_counts = self._empty_event_scale_counts()
         segment_attempt_length_sums = self._empty_event_scale_sums()
@@ -2064,8 +1835,6 @@ class GFM4MTSADAugmentor:
             )
             if use_self_temporal:
                 self_temporal_route_attempt_count += 1
-            if frontend_selector is not None:
-                frontend_selector.record_proposal(seed)
             if used_evidence:
                 evidence_selected += 1
             else:
@@ -2350,16 +2119,6 @@ class GFM4MTSADAugmentor:
                     if status["rms_rescue_eligible"]:
                         type_candidate_rms_rescue_counts[anomaly_type_id] += 1.0
                     gm_hns_metadata = None
-                    if self.negative_screening_mode == "gm_hns":
-                        gm_hns_metadata = self._gm_hns_candidate_metadata(
-                            candidate_score,
-                            actual_rms,
-                            boundary,
-                        )
-                        if status["accepted"] and gm_hns_metadata["in_band"]:
-                            gm_hns_candidate_in_band_count += 1.0
-                        elif status["accepted"]:
-                            gm_hns_candidate_out_of_band_count += 1.0
                     if self.collect_candidate_records:
                         # Keep only train-normal metadata and the edited seed
                         # segment. The audit reconstructs the candidate window
@@ -2400,60 +2159,7 @@ class GFM4MTSADAugmentor:
                                 ),
                             }
                         )
-                    if (
-                        frontend_selector is not None
-                        and self.negative_screening_mode == "frontend_primary"
-                        and not status["accepted"]
-                        and status["plausible"]
-                        and context_valid
-                    ):
-                        # The new selector replaces the Graph-VAR score boundary
-                        # as the admission decision.  Candidate construction,
-                        # empirical support, finite/RMS and context checks have
-                        # already passed; DLinear visibility and graph locality
-                        # are evaluated in one batched pool below.
-                        penalty = (
-                            (candidate_score - boundary["target"]).abs()
-                            / boundary["reference_scale"]
-                            + 0.01 * actual_rms
-                        )
-                        frontend_candidate_pool.append(
-                            {
-                                "candidate_generator": candidate_source,
-                                "start": start,
-                                "end": end,
-                                "values": candidate_values.clone(),
-                                "delta_rms": actual_rms.detach(),
-                                "score": candidate_score.detach(),
-                                "target": boundary["target"].detach(),
-                                "reference_scale": boundary[
-                                    "reference_scale"
-                                ].detach(),
-                                "normalized_gain": normalized_gain.detach(),
-                                "sample_weight": candidate_score.new_tensor(
-                                    self.frontend_primary_nonlegacy_weight
-                                ),
-                                "acceptance_tier": self.ACCEPTANCE_SOFT,
-                                "rms_rescue_eligible": False,
-                                "achievement": status["achievement"],
-                                "orientation": orientation.detach(),
-                                "support_clipped": support_clipped,
-                                "penalty": penalty.detach(),
-                                "wf_temporal_drift": candidate_score.new_tensor(
-                                    float("nan")
-                                ),
-                                "wf_relational_drift": candidate_score.new_tensor(
-                                    float("nan")
-                                ),
-                                "legacy_accepted": False,
-                            }
-                        )
-                        frontend_primary_nonlegacy_pool_count += 1
                     if not status["accepted"]:
-                        continue
-                    if frontend_selector is not None and not context_valid:
-                        # The v2.2 audit/replay contract is the intersection
-                        # of legacy acceptance and candidate-context validity.
                         continue
                     wf_temporal_drift = candidate_score.new_tensor(
                         float("nan")
@@ -2567,23 +2273,12 @@ class GFM4MTSADAugmentor:
                                 "gm_hns_penalty": gm_hns_metadata["penalty"],
                             }
                         )
-                    if frontend_selector is not None:
-                        # The candidate already passed the legacy mechanism,
-                        # support, context, and optional Wf contracts.  Batch
-                        # the remaining DLinear/Pearson checks per window.
-                        frontend_candidate_pool.append(candidate_record)
-                        select_candidate = False
-                    elif self.wf_orthogonality_enable:
+                    if self.wf_orthogonality_enable:
                         select_candidate = self._wf_candidate_is_better(
                             candidate_record,
                             best_candidate,
                         )
-                    elif self.negative_screening_mode == "gm_hns":
-                        select_candidate = self._gm_hns_candidate_is_better(
-                            candidate_record,
-                            best_candidate,
-                        )
-                    elif best_candidate is None:
+                    if best_candidate is None:
                         select_candidate = True
                     else:
                         select_candidate = bool(
@@ -2592,40 +2287,6 @@ class GFM4MTSADAugmentor:
                     if select_candidate:
                         best_candidate = candidate_record
 
-            if frontend_selector is not None:
-                best_candidate, frontend_diagnostics = frontend_selector.select(
-                    windows[batch_idx],
-                    frontend_reference[batch_idx],
-                    adjacency[batch_idx],
-                    seed,
-                    frontend_candidate_pool,
-                )
-                frontend_selector.record_pool(
-                    seed,
-                    frontend_diagnostics["evaluated"],
-                    frontend_diagnostics["eligible"],
-                    best_candidate is not None,
-                )
-                frontend_effective_candidate_count += frontend_diagnostics[
-                    "evaluated"
-                ]
-                frontend_effective_eligible_count += frontend_diagnostics[
-                    "eligible"
-                ]
-                frontend_effective_below_count += frontend_diagnostics[
-                    "below_frontend"
-                ]
-                frontend_effective_above_count += frontend_diagnostics[
-                    "above_frontend"
-                ]
-                frontend_effective_graph_nonlocal_count += frontend_diagnostics[
-                    "graph_nonlocal"
-                ]
-                if frontend_diagnostics.get("coverage_rescue_used", False):
-                    frontend_effective_rescue_used_count += 1
-                frontend_primary_nonlegacy_eligible_count += int(
-                    frontend_diagnostics.get("eligible_nonlegacy", 0)
-                )
 
             augmented[batch_idx, :, seed] = windows[batch_idx, :, seed]
             if best_candidate is None:
@@ -2678,20 +2339,6 @@ class GFM4MTSADAugmentor:
             acceptance_tier[batch_idx] = best_candidate["acceptance_tier"]
             rms_rescue_mask[batch_idx] = best_candidate["rms_rescue_eligible"]
             selected_delta_rms[batch_idx] = best_candidate["delta_rms"]
-            if self.negative_screening_mode == "gm_hns":
-                difficulty = best_candidate.get("gm_hns_difficulty")
-                if difficulty is not None and bool(torch.isfinite(difficulty).item()):
-                    gm_hns_selected_difficulty_sum += difficulty
-                    gm_hns_selected_count += 1.0
-            elif frontend_selector is not None:
-                frontend_effective_selected_d_fd_sum += float(
-                    best_candidate["frontend_direct_drift"].item()
-                )
-                frontend_effective_selected_graph_drift_sum += float(
-                    best_candidate["graph_nonincident_drift"].item()
-                )
-                if not bool(best_candidate.get("legacy_accepted", True)):
-                    frontend_primary_nonlegacy_selected_count += 1
             if self.wf_orthogonality_enable:
                 selected_wf_temporal_drift[batch_idx] = best_candidate[
                     "wf_temporal_drift"
@@ -3237,8 +2884,6 @@ class GFM4MTSADAugmentor:
                 "wf_min_relational_margin",
             )
         }
-        if frontend_selector is not None:
-            coverage_diagnostics.update(frontend_selector.running_diagnostics())
         self.last_coverage_diagnostics = coverage_diagnostics
 
         if not collect_diagnostics:
@@ -3487,61 +3132,6 @@ class GFM4MTSADAugmentor:
             "lower": lower,
         }
 
-    def _gm_hns_candidate_metadata(self, candidate_score, perturbation_rms, boundary):
-        """Score a valid candidate inside the normal tail boundary.
-
-        ``difficulty`` is the candidate's relative position between the
-        scheduled boundary target and the normal-support cap.  Values close
-        to zero are just over the acceptance floor, while values close to one
-        are saturated/easy negatives.  GM-HNS keeps the middle band and uses
-        a small RMS tie-breaker to prefer local edits.
-        """
-        width = (boundary["cap"] - boundary["target"]).clamp_min(1e-6)
-        difficulty = (candidate_score - boundary["target"]) / width
-        finite = bool(torch.isfinite(difficulty).item()) and bool(
-            torch.isfinite(perturbation_rms).item()
-        )
-        if not finite:
-            return {
-                "difficulty": candidate_score.new_tensor(float("nan")),
-                "in_band": False,
-                "penalty": candidate_score.new_tensor(float("inf")),
-            }
-        difficulty_value = float(difficulty.detach().item())
-        in_band = (
-            self.gm_hns_difficulty_low - 1e-8
-            <= difficulty_value
-            <= self.gm_hns_difficulty_high + 1e-8
-        )
-        distance = abs(difficulty_value - self.gm_hns_difficulty_target)
-        outside = max(self.gm_hns_difficulty_low - difficulty_value, 0.0)
-        outside += max(difficulty_value - self.gm_hns_difficulty_high, 0.0)
-        penalty = outside + distance + self.gm_hns_rms_weight * max(
-            float(perturbation_rms.detach().item()),
-            0.0,
-        )
-        return {
-            "difficulty": difficulty.detach(),
-            "in_band": bool(in_band),
-            "penalty": candidate_score.new_tensor(penalty),
-        }
-
-    def _gm_hns_candidate_is_better(self, candidate, incumbent):
-        """Prefer medium-hard candidates, with deterministic legacy fallback."""
-        if incumbent is None:
-            return True
-        candidate_in_band = bool(candidate.get("gm_hns_in_band", False))
-        incumbent_in_band = bool(incumbent.get("gm_hns_in_band", False))
-        if candidate_in_band != incumbent_in_band:
-            return candidate_in_band
-        candidate_penalty = candidate.get("gm_hns_penalty")
-        incumbent_penalty = incumbent.get("gm_hns_penalty")
-        if candidate_penalty is not None and incumbent_penalty is not None:
-            if bool((candidate_penalty < incumbent_penalty).item()):
-                return True
-            if bool((candidate_penalty > incumbent_penalty).item()):
-                return False
-        return bool(candidate["penalty"] < incumbent["penalty"])
 
     def _direct_quantile_boundary(
         self,
@@ -4091,13 +3681,8 @@ class GFM4MTSADAugmentor:
     ):
         strength = self._scheduled_edit_strength(progress)
         if self.normal_mechanism is not None:
-            if self.candidate_generator != "graph_var":
-                candidates, _ = self._normal_candidate_segments(windows[batch_idx], seed, start, end,
-                    anomaly_type, windows.new_tensor([strength]), phase=batch_idx + seed + start)
-                values = candidates[0] if candidates else None
-            else:
-                values = self.normal_mechanism.counterfactual(
-                    windows[batch_idx], seed, start, end, anomaly_type, strength)
+            values = self.normal_mechanism.counterfactual(
+                windows[batch_idx], seed, start, end, anomaly_type, strength)
             if values is not None:
                 augmented[batch_idx, start:end, seed] = values
             return
@@ -5481,8 +5066,6 @@ class GFM4MTSADAugmentor:
     def _mechanism_seed_prior(self, device, dtype):
         if self.seed_selection != "mechanism_aware":
             return None
-        if self.frontend_graph_effective_selector is not None:
-            return self.frontend_graph_effective_selector.seed_prior(device, dtype)
         if self.normal_mechanism is None or not self.normal_mechanism.fitted:
             return None
         prior = self.normal_mechanism.seed_relevance(device, dtype)
@@ -5528,19 +5111,14 @@ class GFM4MTSADAugmentor:
         Counts are cumulative over calls (training AND validation if both call).
         """
         sources = [self.candidate_generator] * len(strengths)
-        if self.candidate_generator == "hybrid":
-            sources = ["graph_var" if (index + phase) % 2 == 0 else "funtsg_inspired"
-                       for index in range(len(strengths))]
         generated = [None] * len(sources)
-        for source in ("graph_var", "funtsg_inspired"):
+        for source in ("graph_var",):
             indices = [i for i, name in enumerate(sources) if name == source]
             if not indices:
                 continue
             levels = strengths[indices]
             self._record_generator_count(source, "proposed", len(indices), seed, anomaly_type, start, end, window.size(0))
-            if source == "funtsg_inspired":
-                values = function_candidates(self.normal_mechanism, window, seed, start, end, anomaly_type, levels)
-            elif self.counterfactual_implementation != "scalar":
+            if self.counterfactual_implementation != "scalar":
                 candidate_args = (
                     window,
                     seed,

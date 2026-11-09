@@ -62,14 +62,13 @@ def _load_seeded_frontend_registration(args):
     return registration_path, registration
 
 
-
 def configure(args):
+    if args.frontend_init != 'pretrained' or args.run_mode != 'primary':
+        raise ValueError('The public main recipe uses warm-start 30-epoch joint training')
     if args.backend not in BACKENDS:
         raise ValueError(f"backend must be one of {BACKENDS}")
     if args.entity not in ENTITIES:
         raise ValueError(f"entity must be one of {ENTITIES}")
-    if args.run_mode not in ("smoke", "primary"):
-        raise ValueError("run_mode must be smoke or primary")
     if args.frontend_init not in FRONTEND_INITS:
         raise ValueError(f"frontend_init must be one of {FRONTEND_INITS}")
     seed = int(getattr(args, "seed", 0))
@@ -77,8 +76,6 @@ def configure(args):
         raise ValueError("seed must be nonnegative")
     frontend_registration_path = None
     frontend_registration = None
-    if args.frontend_init == "fresh" and getattr(args, "frontend_registration", None):
-        raise ValueError("fresh initialization cannot load a frontend registration")
     spec = SPECS[(args.backend, args.entity)]
     source_path = ROOT / spec["snapshot"]
     if _sha256(source_path) != spec["config_sha256"]:
@@ -101,20 +98,17 @@ def configure(args):
         raise ValueError("unexpected backend tuning mode")
 
     cfg.DLINEAR.FREEZE = False
-    if args.frontend_init == "pretrained":
-        frontend_registration_path, frontend_registration = (
-            _load_seeded_frontend_registration(args)
-        )
-        frontend_checkpoint = Path(frontend_registration["checkpoint"])
-        expected_frontend_sha256 = str(frontend_registration["checkpoint_sha256"])
-        if not expected_frontend_sha256:
-            raise ValueError("registered source config has no frontend SHA256")
-        if _sha256(frontend_checkpoint) != expected_frontend_sha256:
-            raise ValueError("registered frontend checkpoint changed; refuse warm-start run")
-        cfg.GFM4MTSAD.UNIFIED.FRONTEND_CHECKPOINT = str(frontend_checkpoint)
-        cfg.GFM4MTSAD.UNIFIED.FRONTEND_SHA256 = expected_frontend_sha256
-    else:
-        cfg.GFM4MTSAD.UNIFIED.FRONTEND_CHECKPOINT = ""
+    frontend_registration_path, frontend_registration = (
+        _load_seeded_frontend_registration(args)
+    )
+    frontend_checkpoint = Path(frontend_registration["checkpoint"])
+    expected_frontend_sha256 = str(frontend_registration["checkpoint_sha256"])
+    if not expected_frontend_sha256:
+        raise ValueError("registered source config has no frontend SHA256")
+    if _sha256(frontend_checkpoint) != expected_frontend_sha256:
+        raise ValueError("registered frontend checkpoint changed; refuse warm-start run")
+    cfg.GFM4MTSAD.UNIFIED.FRONTEND_CHECKPOINT = str(frontend_checkpoint)
+    cfg.GFM4MTSAD.UNIFIED.FRONTEND_SHA256 = expected_frontend_sha256
     cfg.SEED = seed
     args._frontend_registration_path = frontend_registration_path
     args._frontend_registration = frontend_registration
@@ -149,14 +143,10 @@ def configure(args):
         cfg.GFM4MTSAD.GFM_BACKEND.SOURCE_MODEL_PATH = asset_path(args.assets, "owleye_source")
     elif args.owleye_checkpoint is not None:
         raise ValueError("OWLEYE checkpoint supplied to AnomalyGFM run")
-    if args.run_mode == "smoke":
-        cfg.SOLVER.MAX_EPOCH = 1
-        cfg.TRAIN.EVAL_PERIOD = 1
     if args.device == "cpu":
         cfg.DATA_LOADER.NUM_WORKERS = 0
         cfg.DATA_LOADER.PIN_MEMORY = False
     return cfg, source_path, source
-
 
 
 def parameter_digest(module):
@@ -165,7 +155,6 @@ def parameter_digest(module):
         digest.update(name.encode("utf-8"))
         digest.update(parameter.detach().cpu().contiguous().numpy().tobytes())
     return digest.hexdigest()
-
 
 
 def assert_joint_trainables(model, optimizer):
@@ -185,7 +174,6 @@ def assert_joint_trainables(model, optimizer):
     for name, parameter in model.gfm.named_parameters():
         if name not in native and parameter.requires_grad:
             raise RuntimeError(f"pretrained GFM backbone was unfrozen: {name}")
-
 
 
 class JointTrainer(GFM4MTSADTrainer):
@@ -244,7 +232,6 @@ class JointTrainer(GFM4MTSADTrainer):
             )
 
 
-
 def run(args):
     cfg, source_path, source = configure(args)
     args.output_dir.mkdir(parents=True, exist_ok=False)
@@ -273,10 +260,9 @@ def run(args):
         model = InformationPreservingUnifiedGFM4MTSAD(cfg).to(device)
         frontend_random_sha256 = parameter_digest(model.imlp)
         frontend_load_report = None
-        if args.frontend_init == "pretrained":
-            frontend_load_report = model.load_shared_frontend_checkpoint(
-                cfg.GFM4MTSAD.UNIFIED.FRONTEND_CHECKPOINT
-            )
+        frontend_load_report = model.load_shared_frontend_checkpoint(
+            cfg.GFM4MTSAD.UNIFIED.FRONTEND_CHECKPOINT
+        )
         frontend_before = parameter_digest(model.imlp)
         frontend_checkpoint_changed_initialization = (
             frontend_before != frontend_random_sha256
@@ -354,48 +340,6 @@ def run(args):
             "test_labels_used_for_training_or_selection": False,
         }
         (args.output_dir / "audit.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        if args.gradient_audit_only:
-            from models.gfm4mtsad import trainer_gfm4mtsad as trainer_module
-
-            trainer.cur_epoch = 0
-            trainer.cur_iter = 1
-            model.train()
-            batch = next(iter(trainer.train_loader))
-            windows, _ = trainer_module.prepare_inputs(batch)
-            trainer.optimizer.zero_grad()
-            try:
-                with torch.autograd.detect_anomaly():
-                    loss_outputs = trainer._forward_loss(windows)
-                    loss_outputs["total"].backward()
-            except RuntimeError as error:
-                report.update(status="GRADIENT_AUDIT_FAILED", gradient_error=str(error))
-                (args.output_dir / "audit.json").write_text(
-                    json.dumps(report, indent=2) + "\n", encoding="utf-8"
-                )
-                raise
-            invalid = [
-                name for name, parameter in model.named_parameters()
-                if parameter.grad is not None
-                and not torch.isfinite(parameter.grad).all()
-            ]
-            report.update(
-                status="GRADIENT_AUDIT_COMPLETE",
-                loss=float(loss_outputs["total"].detach().cpu()),
-                nonfinite_gradients=invalid,
-                frontend_gradient_count=sum(
-                    p.grad is not None for p in model.imlp.parameters()
-                ),
-                optimizer_steps=0,
-            )
-            (args.output_dir / "audit.json").write_text(
-                json.dumps(report, indent=2) + "\n", encoding="utf-8"
-            )
-            print(
-                f"[joint init gradient audit] init={args.frontend_init} "
-                f"{report['status']} invalid={invalid[:20]}",
-                flush=True,
-            )
-            return report
         trainer.train()
         best = torch.load(args.output_dir / "checkpoint_best.pth", map_location="cpu", weights_only=False)
         model.load_state_dict(best["model_state"], strict=True)

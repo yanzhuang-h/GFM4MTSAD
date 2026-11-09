@@ -111,31 +111,6 @@ class UnifiedNodeToTimePredictor(GFM4MTSADPredictor):
         )
         super().save_to_npy(**kwargs)
 
-    def get_score_source_sweep(self):
-        sweep = dict(super().get_score_source_sweep())
-        for source in (
-            "unified_raw",
-            "unified_causal",
-            "unified_reliability_gated",
-            "unified_node_to_time",
-        ):
-            scores = self.test_score_sources[source]
-            threshold = self._get_threshold(scores, self.test_labels)
-            pred = (scores > threshold).astype(int)
-            pred_pa = (
-                self.point_adjust(pred.copy(), self.test_labels)
-                if self.cfg.TEST.POINT_ADJUST
-                else None
-            )
-            metrics = self.get_results(scores, pred_pa, self.test_labels)
-            sweep[source] = {
-                "Threshold": threshold,
-                "AUROC": metrics["AUROC"],
-                "AUPRC": metrics["AUPRC"],
-                "F1": metrics["F1"],
-                "F1_PA": metrics.get("F1_PA", float("nan")),
-            }
-        return sweep
 
 
 class InformationPreservingPredictor(UnifiedNodeToTimePredictor):

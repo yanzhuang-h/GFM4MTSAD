@@ -1,71 +1,53 @@
 # GFM4MTSAD
 
-Implementation of **Graph Foundation Models Can Become Effective Multivariate
-Time Series Anomaly Detectors**, with AnomalyGFM (A) and OwlEye (O) backends.
+Code for **Graph Foundation Models Can Become Effective Multivariate Time Series Anomaly Detectors**.
+Backends: AnomalyGFM (A) and OwlEye (O).
 
-## Installation
+## Setup
 
-Tested with Python 3.10, PyTorch 2.7.1, CUDA 12.8, and PyTorch Geometric 2.3.1.
+Tested with Python 3.10, PyTorch 2.7.1, CUDA 12.8 and PyG 2.3.1.
 
 ```bash
 git clone https://github.com/yanzhuang-h/GFM4MTSAD.git
 cd GFM4MTSAD
-python -m venv .venv
-source .venv/bin/activate
 pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
 
-## Data and pretrained models
+Follow [data and pretrained-model preparation](data/README.md), then set the paths in
+`configs/assets.local.json`. The OwlEye checkpoint download is pending.
 
-Prepare [MSL, SMAP and SMD](data/README.md), then follow the
-[pretrained model instructions](docs/ASSETS.md).
-Copy `configs/assets.example.json` to `configs/assets.local.json` and set your
-data, model-source and checkpoint paths. Training requires no network access.
-
-Supported entities: `MSL_P-15`, `SMAP_T-3`, `SMD_1-1`.
-Supported backends: `anomalygfm`, `owleye`.
-The OwlEye checkpoint was pretrained by us using its paper and source code;
-its download link will be added separately.
-
-## Training
+## Training and evaluation
 
 ```bash
 DEVICE=0 ENTITY=SMD_1-1 BACKEND=anomalygfm SEED=0 \
 OUTPUT=outputs/SMD_1-1_anomalygfm_seed0 bash scripts/run.sh
 ```
 
-This runs **30 epochs of frontend pretraining followed by 30 epochs of
-warm-start joint training**, and evaluates the selected model. During joint
-training, the temporal frontend and adaptation modules are trainable, while
-the pretrained GFM backbone stays frozen. Checkpoints are selected every five
-epochs using normal/synthetic validation loss.
+Use `MSL_P-15`, `SMAP_T-3` or `SMD_1-1`, with `anomalygfm` or `owleye`.
+Each run pretrains its DLinear frontend for 30 epochs, then jointly trains the
+frontend and adaptation modules for 30 epochs with the GFM backbone frozen.
+Batch size is 256; checkpoints use normal/synthetic validation loss every five epochs.
+Results and checkpoints are saved in `OUTPUT/frontend/` and `OUTPUT/joint/`.
 
-Change `ENTITY`, `BACKEND`, `SEED`, and `OUTPUT` for another run. Results are
-saved under `OUTPUT/frontend/` and `OUTPUT/joint/`; use a new output directory
-for each run. Separate `pretrain` and `train` commands are also available through
-`python main.py --help`.
-
-## Evaluation
-
-Reload a trained model and its saved normal references:
+To evaluate a saved joint checkpoint and its fixed normal references:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python main.py evaluate \
-  --entity SMD_1-1 --backend anomalygfm \
-  --assets configs/assets.local.json \
-  --run-dir outputs/SMD_1-1_anomalygfm_seed0/joint \
+python main.py evaluate --entity SMD_1-1 --backend anomalygfm \
+  --assets configs/assets.local.json --run-dir outputs/SMD_1-1_anomalygfm_seed0/joint \
   --output outputs/SMD_1-1_anomalygfm_seed0_eval
 ```
 
-AUROC, trapezoidal AUPRC and oracle F1 are saved with the score arrays.
-See [the training and evaluation protocol](docs/PROTOCOL.md) for scoring details.
+The reported metrics are AUROC, trapezoidal AUPRC and oracle F1 (test-label
+threshold, no point adjustment), using window-any labels at length 60 and stride 1.
+OwlEye uses tail consensus with tail mass 0.05 and fusion weight 0.5;
+AnomalyGFM uses the unified node-to-time score. See `python main.py --help` for separate stages.
 
-## Acknowledgments
+## License and acknowledgments
 
-Our implementation builds on [CAROTS](https://github.com/kimanki/CAROTS),
+[Non-commercial license](LICENSE); commercial use requires permission.
+We build on [CAROTS](https://github.com/kimanki/CAROTS),
 [DLinear](https://github.com/cure-lab/LTSF-Linear),
-[AnomalyGFM](https://github.com/mala-lab/AnomalyGFM), and
+[AnomalyGFM](https://github.com/mala-lab/AnomalyGFM) and
 [OwlEye](https://github.com/zhenglecheng/ICLR-2026-OWLEYE).
-Upstream attribution and terms are retained in [third-party notices](docs/THIRD_PARTY.md).
-Paper experiment scripts are reserved under `experiments/`.
+Original licenses and attributions are retained in [licenses/](licenses/NOTICE).

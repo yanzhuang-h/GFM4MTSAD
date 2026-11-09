@@ -1,0 +1,16 @@
+Third-party notices
+
+CAROTS training scaffold: copyright (c) 2025 HyunGi Kim.
+https://github.com/kimanki/CAROTS
+The original non-commercial license and commercial permission contact are
+preserved in CAROTS.txt. GFM4MTSAD modifies the framework, training and evaluation.
+
+DLinear: https://github.com/cure-lab/LTSF-Linear
+The Apache-2.0 license is preserved in DLinear.txt. The adapted temporal encoder
+is in models/dlinear/; GFM4MTSAD-specific integration is in models/gfm4mtsad/.
+
+AnomalyGFM: https://github.com/mala-lab/AnomalyGFM
+OwlEye: https://github.com/zhenglecheng/ICLR-2026-OWLEYE
+These model sources and weights are obtained separately under their upstream
+terms. The AnomalyGFM loader removes an unused sparse import and fixes adjacency
+device/dtype in memory. No third-party GFM source, weights or datasets are bundled.
